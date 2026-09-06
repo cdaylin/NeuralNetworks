@@ -1,0 +1,17 @@
+<Solution>
+  <!--
+    Shared with the published mirror: this is the only copy, and the publish rewrites the README path
+    below to where the overlay puts that file in the published repository. Everything else resolves
+    unchanged from either repository root.
+
+    Note that an XML comment cannot contain a double hyphen, so the prose convention used elsewhere
+    does not apply in this file.
+  -->
+  <Folder Name="/Documentation/">
+    <File Path="README.md" />
+  </Folder>
+  <Project Path="NeuralNetworks/NeuralNetworks.csproj" />
+  <Project Path="NeuralNetworksTests/NeuralNetworksTests.csproj" />
+  <Project Path="TestUtilities/TestUtilities.csproj" />
+  <Project Path="Utilities/Utilities.csproj" />
+</Solution>

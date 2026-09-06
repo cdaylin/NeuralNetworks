@@ -1,0 +1,83 @@
+<Project>
+
+  <!--
+    Solution-wide build settings for DSS. Imported automatically by every project before
+    the SDK's own targets run. See Reference/Dev/Conventions/DotNetBuild.md in the
+    ContextWiki for the general rationale.
+
+    Per-project files may override any of these; the project file wins. Most projects
+    contribute additions (e.g. extra NoWarn codes) via the $(PropertyName) append pattern:
+
+        <NoWarn>$(NoWarn);CA1725</NoWarn>
+  -->
+
+  <PropertyGroup>
+
+    <!-- Language and analysis -->
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>True</AllowUnsafeBlocks>
+    <CheckForOverflowUnderflow>True</CheckForOverflowUnderflow>
+    <LangVersion>preview</LangVersion>
+    <AnalysisLevel>latest</AnalysisLevel>
+
+    <!-- Documentation -->
+    <GenerateDocumentationFile>True</GenerateDocumentationFile>
+
+    <!-- Code style enforced in build -->
+    <EnforceCodeStyleInBuild>True</EnforceCodeStyleInBuild>
+
+    <!-- Don't prompt or send a report on an internal compiler error. -->
+    <ErrorReport>none</ErrorReport>
+
+    <!--
+      Strict-build gates. Unconditional (NOT under a Configuration|Platform group) so
+      they apply on every build regardless of how a project is invoked. Conditioning on
+      a specific Configuration|Platform silently bypasses the gates when the build uses
+      something else.
+    -->
+    <TreatWarningsAsErrors>True</TreatWarningsAsErrors>
+    <WarningLevel>9999</WarningLevel>
+
+    <!--
+      Suppressed warnings (NoWarn) and warnings demoted from errors (WarningsNotAsErrors),
+      pooled across the whole solution:
+        1701;1702 - MSBuild reference-assembly noise carried from project templates.
+        CS1591 - missing XML doc comments (docs are generated but not required everywhere).
+        OPENAI001 - OpenAI SDK experimental-API diagnostic.
+        CA1725;CA1822 - analyzer style rules relaxed for the Reversi UI code.
+        NU1900 - NuGet audit could-not-reach-source warning.
+        NU1902;NU1903 - NuGet package-vulnerability advisories (WinUI dependency chain).
+        NU1603 - NuGet resolved-higher-than-requested dependency.
+    -->
+    <NoWarn>1701;1702;CS1591;CA1725;CA1822;OPENAI001</NoWarn>
+    <WarningsNotAsErrors>NU1603;NU1900;NU1902;NU1903</WarningsNotAsErrors>
+
+    <!--
+      Default root namespace: Daylin.<ProjectName>. Projects with a different convention
+      (test projects mirroring their unit-under-test, etc.) override in the csproj.
+    -->
+    <RootNamespace>Daylin.$(MSBuildProjectName.Replace(" ", "_"))</RootNamespace>
+
+  </PropertyGroup>
+
+  <!--
+    Shared Windows/WinUI settings. Gated on an explicit project-name allowlist because
+    this file is imported before the project body, so the usual signals (UseWinUI,
+    TargetFramework) aren't set yet — and UseWinUI/TargetFramework must be established
+    this early for the Windows App SDK package targets to see them. Add a new WinUI
+    project's name here to opt it in.
+  -->
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'WinUi'
+      or '$(MSBuildProjectName)' == 'WinUiTests'
+      or '$(MSBuildProjectName)' == 'PythonWinUi'
+      or '$(MSBuildProjectName)' == 'AiAgencyApp'
+      or '$(MSBuildProjectName)' == 'ReversiApp'">
+    <TargetFramework>net9.0-windows10.0.22621.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <RuntimeIdentifiers>win-x86;win-x64;win-arm64</RuntimeIdentifiers>
+    <UseWinUI>true</UseWinUI>
+    <WebView2EnableCsWinRTProjection>False</WebView2EnableCsWinRTProjection>
+  </PropertyGroup>
+
+</Project>
