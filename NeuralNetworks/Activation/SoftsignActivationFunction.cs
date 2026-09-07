@@ -59,6 +59,8 @@ public sealed class SoftsignActivationFunction : IActivationFunction
     /// </returns>
     public float CalculateDerivative(float value)
     {
-        return (float)(1 / Math.Pow(Math.Abs(value) + 1, 2));
+        double denominator = Math.Abs(value) + 1;
+
+        return (float)(1 / (denominator * denominator));
     }
 }

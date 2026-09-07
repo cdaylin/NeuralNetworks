@@ -26,9 +26,20 @@ public sealed class EanafFunction : IActivationFunction
     /// <returns>
     /// Returns the activation result and its derivative for <paramref name="value"/>.
     /// </returns>
+    /// <remarks>
+    /// Both results are derived from a single exponential.  Computing them through
+    /// <see cref="CalculateActivation(float)"/> and <see cref="CalculateDerivative(float)"/> instead would
+    /// evaluate <see cref="Math.Exp(double)"/> twice for the same input, which is the cost this method
+    /// exists to avoid.
+    /// </remarks>
     public (float Activation, float Derivative) Calculate(float value)
     {
-        return (CalculateActivation(value), CalculateDerivative(value));
+        if (value > MaxThreshold)
+            return (value, 1f);
+
+        double power = Math.Exp(value);
+
+        return (CalculateActivation(value, power), CalculateDerivative(value, power));
     }
 
     /// <summary>
@@ -45,9 +56,7 @@ public sealed class EanafFunction : IActivationFunction
         if (value > MaxThreshold)
             return value;
 
-        double power = Math.Exp(value);
-
-        return (float)(value * power / (power + 2));
+        return CalculateActivation(value, Math.Exp(value));
     }
 
     /// <summary>
@@ -64,9 +73,43 @@ public sealed class EanafFunction : IActivationFunction
         if (value > MaxThreshold)
             return 1f;
 
-        double power = Math.Exp(value);
+        return CalculateDerivative(value, Math.Exp(value));
+    }
 
-        return (float)((Math.Pow(power, 2) + power * 2 * (value + 1)) / Math.Pow(power + 2, 2));
+    /// <summary>
+    /// EANAF function, for a caller that has already evaluated the exponential.
+    /// </summary>
+    /// <param name="value">
+    /// A pre-activated output value for a neuron, at or below <see cref="MaxThreshold"/>.
+    /// </param>
+    /// <param name="power">
+    /// <see cref="Math.Exp(double)"/> of <paramref name="value"/>.
+    /// </param>
+    /// <returns>
+    /// Returns the activation result for <paramref name="value"/>.
+    /// </returns>
+    private static float CalculateActivation(float value, double power)
+    {
+        return (float)(value * power / (power + 2));
+    }
+
+    /// <summary>
+    /// EANAF derivative function, for a caller that has already evaluated the exponential.
+    /// </summary>
+    /// <param name="value">
+    /// A pre-activated output value for a neuron, at or below <see cref="MaxThreshold"/>.
+    /// </param>
+    /// <param name="power">
+    /// <see cref="Math.Exp(double)"/> of <paramref name="value"/>.
+    /// </param>
+    /// <returns>
+    /// Returns the derivative of the activation value for <paramref name="value"/>.
+    /// </returns>
+    private static float CalculateDerivative(float value, double power)
+    {
+        double denominator = power + 2;
+
+        return (float)(((power * power) + (power * 2 * (value + 1))) / (denominator * denominator));
     }
 
     private static float MaxThreshold => 18f;

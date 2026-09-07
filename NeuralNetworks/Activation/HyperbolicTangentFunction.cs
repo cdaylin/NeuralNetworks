@@ -33,7 +33,11 @@ public sealed class HyperbolicTangentFunction : IActivationFunction
     {
         float tanhValue = CalculateActivation(value);
 
-        float derivative = (float)(1 - Math.Pow(tanhValue, 2));
+        // Squared in double, which is what Math.Pow did here.  Narrowing to float first would round
+        // twice and is not the same calculation.
+        double activation = tanhValue;
+
+        float derivative = (float)(1 - (activation * activation));
 
         return (tanhValue, derivative);
     }
