@@ -12,83 +12,136 @@ namespace Daylin.NeuralNetworks.Backpropagation;
 /// test specific aspects of the training algorithm.
 /// <para>
 /// These tests are in a sense performance tests, in that they verify that simple neural networks can be
-/// successfully trained to perform basic algorithms within a reasonable number of training epochs.  
+/// successfully trained to perform basic algorithms within a reasonable number of training epochs.
 /// </para><para>
 /// Backpropagation training can be considered to be a form of gradient descent search algorithm.  Gradient
 /// descent is not guaranteed to find an optimal solution, due to the potential to "get stuck" in local
-/// optima.  Due to the randomization of initial connection weights in each neural network, these tests
-/// are nondeterministic.  Therefore, it is possible that a test may occassionally fail due to the training
-/// algorithm failing to escape a local optimum.  A very occassional test failure due to a the maximum number
-/// of epochs being exceeded does not necessarily indicate a defect.
+/// optima.  Whether a particular network escapes a local optimum depends on its initial connection weights,
+/// so each network here is built from a seeded weight initializer.  Every run therefore trains exactly the
+/// same networks, and a failure is a real signal rather than an unlucky draw.
+/// </para><para>
+/// The seeds are arbitrary, and are meant to stay that way.  A seed chosen because it passes would prove
+/// only that it still passes, and would leave a regression that broke most other seeds undetected.  So when
+/// a seed fails, the network configuration is what should change -- as it did for ReLU, where an arbitrary
+/// seed revealed that the hidden layer was too small.
 /// </para>
 /// </remarks>
 [TestClass]
-[TestCategory("Nondeterministic")]
 public class BackpropagationTests
 {
     public TestContext? TestContext { get; set; }
 
     [TestMethod]
-    public async Task TestIdentityGateAsync()
+    [DataRow("EANAF", 101)]
+    [DataRow("ReLU", 102)]
+    [DataRow("Tanh", 103)]
+    [DataRow("Softsign", 104)]
+    [DataRow("Sigmoid", 105)]
+    public async Task NetworkLearnsIdentityGateAsync(string activationFunctionName, int seed)
     {
         await TestWithSingleHiddenLayerAsync(
             testData: BackpropagationTestData.Identity,
-            neuronCount: 4);
+            neuronCount: 4,
+            activationFunctionName: activationFunctionName,
+            seed: seed);
     }
 
     [TestMethod]
-    public async Task TestNotGateAsync()
+    [DataRow("EANAF", 201)]
+    [DataRow("ReLU", 202)]
+    [DataRow("Tanh", 203)]
+    [DataRow("Softsign", 204)]
+    [DataRow("Sigmoid", 205)]
+    public async Task NetworkLearnsNotGateAsync(string activationFunctionName, int seed)
     {
         await TestWithSingleHiddenLayerAsync(
             testData: BackpropagationTestData.Not,
-            neuronCount: 4);
+            neuronCount: 4,
+            activationFunctionName: activationFunctionName,
+            seed: seed);
     }
 
     [TestMethod]
-    public async Task TestAndGateAsync()
+    [DataRow("EANAF", 301)]
+    [DataRow("ReLU", 302)]
+    [DataRow("Tanh", 303)]
+    [DataRow("Softsign", 304)]
+    [DataRow("Sigmoid", 305)]
+    public async Task NetworkLearnsAndGateAsync(string activationFunctionName, int seed)
     {
         await TestWithSingleHiddenLayerAsync(
             testData: BackpropagationTestData.And,
-            neuronCount: 4);
+            neuronCount: 4,
+            activationFunctionName: activationFunctionName,
+            seed: seed);
     }
 
     [TestMethod]
-    public async Task TestXOrGateAsync()
+    [DataRow("EANAF", 401)]
+    [DataRow("ReLU", 402)]
+    [DataRow("Tanh", 403)]
+    [DataRow("Softsign", 404)]
+    [DataRow("Sigmoid", 405)]
+    public async Task NetworkLearnsExclusiveOrGateAsync(string activationFunctionName, int seed)
     {
         await TestWithSingleHiddenLayerAsync(
             testData: BackpropagationTestData.XOr,
-            neuronCount: 8);
+            neuronCount: 8,
+            activationFunctionName: activationFunctionName,
+            seed: seed);
     }
 
     [TestMethod]
-    public async Task TestDeepNetworksAsync()
+    public async Task DeepNetworkOfTanhLayersLearnsExclusiveOrAsync()
     {
         BackpropagationTestData data = BackpropagationTestData.XOr;
 
         await TestAsync(
             testData: data,
+            seed: 501,
             (4, ActivationFunctions.Tanh),
             (4, ActivationFunctions.Tanh),
             (data.OutputCount, ActivationFunctions.Tanh));
+    }
 
-        // The ReLU layer is sized for the same reason as minReluNeuronCount above, measured against this
-        // architecture rather than that one: over 60 seeded runs, 4 neurons converged 80% of the time, 6 and
-        // 8 both 98%, and 10 or more always.  A Softsign layer ahead of ReLU makes it considerably more
+    [TestMethod]
+    public async Task DeepNetworkOfMixedActivationFunctionsLearnsExclusiveOrAsync()
+    {
+        BackpropagationTestData data = BackpropagationTestData.XOr;
+
+        // The ReLU layer is sized for the same reason as minReluNeuronCount below, measured against this
+        // architecture rather than that one: over 60 seeds, 4 neurons converged 80% of the time, 6 and 8
+        // both 98%, and 10 or more always.  A Softsign layer ahead of ReLU makes it considerably more
         // reliable than it is on the raw inputs, where 8 neurons converged only 88% of the time.
         await TestAsync(
             testData: data,
+            seed: 502,
             (4, ActivationFunctions.Softsign),
             (10, ActivationFunctions.Relu),
             (data.OutputCount, ActivationFunctions.Tanh));
+    }
+
+    [TestMethod]
+    public async Task DeepNetworkOfNarrowEanafLayersLearnsExclusiveOrAsync()
+    {
+        BackpropagationTestData data = BackpropagationTestData.XOr;
 
         await TestAsync(
             testData: data,
+            seed: 503,
             (2, ActivationFunctions.Eanaf),
             (4, ActivationFunctions.Eanaf),
             (data.OutputCount, ActivationFunctions.Eanaf));
+    }
+
+    [TestMethod]
+    public async Task DeepNetworkOfFourHiddenLayersLearnsExclusiveOrAsync()
+    {
+        BackpropagationTestData data = BackpropagationTestData.XOr;
 
         await TestAsync(
             testData: data,
+            seed: 504,
             (4, ActivationFunctions.Tanh),
             (4, ActivationFunctions.Eanaf),
             (4, ActivationFunctions.Tanh),
@@ -96,38 +149,47 @@ public class BackpropagationTests
             (data.OutputCount, ActivationFunctions.Tanh));
     }
 
-    private async Task TestWithSingleHiddenLayerAsync(BackpropagationTestData testData, int neuronCount)
+    private async Task TestWithSingleHiddenLayerAsync(
+        BackpropagationTestData testData,
+        int neuronCount,
+        string activationFunctionName,
+        int seed)
     {
+        IActivationFunction activationFunction = GetActivationFunction(activationFunctionName);
+
         // Use Tanh for output layer.  (ReLU does not work well.  Tanh tends to train quickly.)
         (int Count, IActivationFunction Tanh) outputLayer = (testData.OutputCount, ActivationFunctions.Tanh);
 
         // ReLU performs poorly with small numbers of neurons in a layer (due to 'dying' neurons?).  Measured
-        // on XOr over 60 seeded runs: 4 neurons converged 48% of the time, 6 77%, 8 88%, 10 97%, and 12 or
-        // more always.  Twelve also trains fastest of those, at a median of 158 epochs against 178 at eight.
+        // on XOr over 60 seeds: 4 neurons converged 48% of the time, 6 77%, 8 88%, 10 97%, and 12 or more
+        // always.  Twelve also trains fastest of those, at a median of 158 epochs against 178 at eight.
         int minReluNeuronCount = 12;
 
-        // asymmetric activation functions
-        await TestAsync(testData, (neuronCount, ActivationFunctions.Eanaf), outputLayer);
-        await TestAsync(testData, (Math.Max(neuronCount, minReluNeuronCount), ActivationFunctions.Relu), outputLayer);
+        int hiddenNeuronCount = activationFunction.ShortName == "ReLU"
+            ? Math.Max(neuronCount, minReluNeuronCount)
+            : neuronCount;
 
-        // symmetric activation functions
-        await TestAsync(testData, (neuronCount, ActivationFunctions.Tanh), outputLayer);
-        await TestAsync(testData, (neuronCount, ActivationFunctions.Softsign), outputLayer);
-        await TestAsync(testData, (neuronCount, ActivationFunctions.Sigmoid), outputLayer);
+        await TestAsync(testData, seed, (hiddenNeuronCount, activationFunction), outputLayer);
     }
 
     private async Task TestAsync(
         BackpropagationTestData testData,
+        int seed,
         params IEnumerable<(int neuronCount, IActivationFunction activationFunction)> args)
     {
         NeuralNetworkBuilder networkBuilder = new(testData.InputCount);
+
+        // Each layer is initialized from its own generator, as it is when no seed is supplied.  Deriving
+        // those seeds from one source keeps the layers independent while making the whole network
+        // reproducible from a single number.
+        Random seedSource = new(seed);
 
         foreach ((int outputCount, IActivationFunction activationFunction) in args)
         {
             networkBuilder.AddDenseLayer(
                 outputCount: outputCount,
                 activationFunction: activationFunction,
-                weightInitializer: GetWeightInitializer(activationFunction));
+                weightInitializer: GetWeightInitializer(activationFunction, seedSource.Next()));
         }
 
         INeuralNetwork neuralNetwork = networkBuilder.BuildNetwork();
@@ -175,12 +237,26 @@ public class BackpropagationTests
         TestContext.WriteLine($"The neural network was successfully trained after {epochCount} epochs.");
     }
 
-    private IConnectionWeightInitializer GetWeightInitializer(IActivationFunction activationFunction)
+    private IActivationFunction GetActivationFunction(string shortName)
     {
+        return shortName switch
+        {
+            "EANAF" => ActivationFunctions.Eanaf,
+            "ReLU" => ActivationFunctions.Relu,
+            "Tanh" => ActivationFunctions.Tanh,
+            "Softsign" => ActivationFunctions.Softsign,
+            "Sigmoid" => ActivationFunctions.Sigmoid,
+            _ => throw UnhandledCaseException.Create(shortName),
+        };
+    }
+
+    private IConnectionWeightInitializer GetWeightInitializer(IActivationFunction activationFunction, int seed)
+    {
+        // The asymmetric activation functions pair with He initialization, the symmetric ones with Glorot.
         return activationFunction.ShortName switch
         {
-            "EANAF" or "ReLU" => WeightInitializers.He,
-            "Tanh" or "Softsign" or "Sigmoid" => WeightInitializers.Glorot,
+            "EANAF" or "ReLU" => new HeUniformWeightInitializer(seed: seed),
+            "Tanh" or "Softsign" or "Sigmoid" => new GlorotUniformWeightInitializer(seed: seed),
             _ => throw UnhandledCaseException.Create(activationFunction.ShortName),
         };
     }

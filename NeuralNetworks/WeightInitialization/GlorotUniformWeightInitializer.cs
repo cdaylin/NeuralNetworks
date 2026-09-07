@@ -14,11 +14,17 @@ public sealed class GlorotUniformWeightInitializer : IConnectionWeightInitialize
     /// <param name="maxRange">
     /// The maximum range for weights.  (See <see cref="MaxRange"/>.)
     /// </param>
-    public GlorotUniformWeightInitializer(float maxRange = 1)
+    /// <param name="seed">
+    /// A seed for the random number generator used to generate weights, or <see langword="null"/> to draw
+    /// from a shared generator that is not seeded.  Supplying a seed makes the generated weights
+    /// reproducible, so that the training of a network can be repeated exactly.
+    /// </param>
+    public GlorotUniformWeightInitializer(float maxRange = 1, int? seed = null)
     {
         maxRange.ThrowIfNotPositive();
 
         MaxRange = maxRange;
+        SeededRandom = seed is null ? null : new Random(seed.Value);
     }
 
     /// <summary>
@@ -47,11 +53,33 @@ public sealed class GlorotUniformWeightInitializer : IConnectionWeightInitialize
     {
         float range = CalculateRange(inConnectionCount, outConnectionCount);
 
-        return Random.Shared.NextSingle() * range - (range / 2);
+        return NextSingle() * range - (range / 2);
     }
 
     public float CalculateRange(int inConnectionCount, int outConnectionCount)
     {
         return Math.Min(MaxRange, 2 * (float)Math.Sqrt(6.0 / (inConnectionCount + outConnectionCount)));
+    }
+
+    /// <summary>
+    /// A seeded random number generator, or <see langword="null"/> when no seed was supplied.
+    /// </summary>
+    private Random? SeededRandom { get; }
+
+    /// <summary>
+    /// Generates the next random value within the range [0, 1).
+    /// </summary>
+    /// <returns>
+    /// Returns the next random value within the range [0, 1).
+    /// </returns>
+    private float NextSingle()
+    {
+        if (SeededRandom is null)
+            return Random.Shared.NextSingle();
+
+        // A seeded Random is not thread-safe, and GenerateWeight is required to be.  (See
+        // IConnectionWeightInitializer.)
+        lock (SeededRandom)
+            return SeededRandom.NextSingle();
     }
 }

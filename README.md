@@ -104,9 +104,11 @@ The test suite trains 24 networks to convergence -- every activation function ag
 AND, and exclusive-or, plus four deeper architectures -- and asserts that each one learns the function
 within a bounded number of epochs. It takes a few seconds.
 
-Because every network starts from random weights, the suite is deliberately nondeterministic, and the
-tests are marked as such. The layer sizes are chosen to make a failure rare rather than impossible;
-the next section is about how rare.
+Every network is built from a **seeded** weight initializer, so each run trains exactly the same
+networks and a failure is a real signal rather than an unlucky draw. The seeds are arbitrary and
+meant to stay that way: one chosen because it passes would prove only that it still passes, and would
+hide a regression that broke most other seeds. When a seed fails, the configuration is what should
+change — which is how the ReLU layer came to be sized as it is.
 
 ## Why the hidden layers are sized as they are
 

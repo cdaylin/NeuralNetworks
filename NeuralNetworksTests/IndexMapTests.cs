@@ -4,7 +4,7 @@
 public class IndexMapTests
 {
     [TestMethod]
-    public void TestIndexMap()
+    public void ReversingMapReversesSequence()
     {
         // this map should reverse any sequence of 5 values
         IndexMap map = new(Enumerable.Range(0, 5).Reverse());

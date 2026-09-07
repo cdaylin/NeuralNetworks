@@ -39,7 +39,7 @@ public class ActivationFunctionTests
     [DataRow("Tanh")]
     [DataRow("Softsign")]
     [DataRow("Sigmoid")]
-    public void TestCombinedResultMatchesSingleValueResults(string activationFunctionName)
+    public void CombinedResultMatchesSingleValueResults(string activationFunctionName)
     {
         IActivationFunction activationFunction = GetActivationFunction(activationFunctionName);
 
