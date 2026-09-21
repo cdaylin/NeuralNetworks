@@ -73,35 +73,31 @@ internal sealed class ConcatenationLayer : CompositeNetworkLayer
            .AggregateAsync((first, second) => first.Concat(second));
     }
 
-    public override async Task<(IEnumerable<float>, BackpropagateErrorsAsync)> FeedForwardAsync(
+    public override async Task<(IEnumerable<float>, BackpropagateGradientsAsync)> FeedForwardAsync(
         IEnumerable<float> input,
-        BackpropagateErrorsAsync? backpropagateErrorsAsync,
+        BackpropagateGradientsAsync? backpropagateGradientsAsync,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
         // create a handler for gathering results from contained layers
-        ErrorBackpropagationHandler? backpropagationHandler = backpropagateErrorsAsync is null
+        GradientBackpropagationHandler? backpropagationHandler = backpropagateGradientsAsync is null
             ? null
-            : new ErrorBackpropagationHandler(this, backpropagateErrorsAsync);
+            : new GradientBackpropagationHandler(this, backpropagateGradientsAsync);
 
         // feed-forward through contained layers
-        List<(IEnumerable<float>, BackpropagateErrorsAsync)> feedForwardResults =
+        List<(IEnumerable<float>, BackpropagateGradientsAsync)> feedForwardResults =
             await FeedForwardThroughContainedLayersAsync(input, backpropagationHandler, cancellationToken).ToListAsync();
 
         // reassemble output from contained layers
         IEnumerable<float> output = feedForwardResults.SelectMany(result => result.Item1);
 
-        return (output, BackpropagateErrorsAsync);
+        return (output, BackpropagateGradientsAsync);
 
-        async Task BackpropagateErrorsAsync(
-            float learningRate,
-            IEnumerable<float> errors,
-            CancellationToken cancellationToken)
+        async Task BackpropagateGradientsAsync(IEnumerable<float> gradients, CancellationToken cancellationToken)
         {
-            await BackpropagateErrorsToContainedLayersAsync(
-                learningRate,
-                errors,
+            await BackpropagateGradientsToContainedLayersAsync(
+                gradients,
                 feedForwardResults.Select(result => result.Item2),
                 cancellationToken);
         }
@@ -125,10 +121,10 @@ internal sealed class ConcatenationLayer : CompositeNetworkLayer
         }
     }
 
-    private async IAsyncEnumerable<(IEnumerable<float>, BackpropagateErrorsAsync)>
+    private async IAsyncEnumerable<(IEnumerable<float>, BackpropagateGradientsAsync)>
         FeedForwardThroughContainedLayersAsync(
             IEnumerable<float> input,
-            ErrorBackpropagationHandler? backpropagationHandler,
+            GradientBackpropagationHandler? backpropagationHandler,
             [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         int skipCount = 0;
@@ -137,10 +133,10 @@ internal sealed class ConcatenationLayer : CompositeNetworkLayer
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            BackpropagateErrorsAsync? backpropagateAsync = backpropagationHandler is null
+            BackpropagateGradientsAsync? backpropagateAsync = backpropagationHandler is null
                 ? null
-                : (learningRate, errors, cancellationToken) => backpropagationHandler.GatherErrorsAsync(
-                    layer, learningRate, errors, cancellationToken);
+                : (gradients, cancellationToken) => backpropagationHandler.GatherGradientsAsync(
+                    layer, gradients, cancellationToken);
 
             IEnumerable<float> layerInput = input.Skip(skipCount).Take(layer.InputCount);
 
@@ -153,25 +149,21 @@ internal sealed class ConcatenationLayer : CompositeNetworkLayer
         }
     }
 
-    private async Task BackpropagateErrorsToContainedLayersAsync(
-        float learningRate,
-        IEnumerable<float> errors,
-        IEnumerable<BackpropagateErrorsAsync> backpropagationDelegates,
+    private async Task BackpropagateGradientsToContainedLayersAsync(
+        IEnumerable<float> gradients,
+        IEnumerable<BackpropagateGradientsAsync> backpropagationDelegates,
         CancellationToken cancellationToken)
     {
         int index = 0;
         int skipCount = 0;
 
-        foreach (BackpropagateErrorsAsync backpropagateErrorsAsync in backpropagationDelegates)
+        foreach (BackpropagateGradientsAsync backpropagateGradientsAsync in backpropagationDelegates)
         {
             INetworkLayer layer = Layers.ElementAt(index);
 
-            IEnumerable<float> layerErrors = errors.Skip(skipCount).Take(layer.OutputCount);
+            IEnumerable<float> layerGradients = gradients.Skip(skipCount).Take(layer.OutputCount);
 
-            await backpropagateErrorsAsync(
-                learningRate,
-                layerErrors,
-                cancellationToken);
+            await backpropagateGradientsAsync(layerGradients, cancellationToken);
 
             skipCount += layer.OutputCount;
             index += 1;
@@ -179,47 +171,47 @@ internal sealed class ConcatenationLayer : CompositeNetworkLayer
     }
 
     /// <summary>
-    /// Responsible for gathering errors backpropagated from all contained layers and then backpropagating them
-    /// to the preceeding layer.
+    /// Responsible for gathering gradients backpropagated from all contained layers and then backpropagating
+    /// them to the preceeding layer.
     /// </summary>
-    private class ErrorBackpropagationHandler
+    private class GradientBackpropagationHandler
     {
-        public ErrorBackpropagationHandler(
+        public GradientBackpropagationHandler(
             ConcatenationLayer concatenationLayer,
-            BackpropagateErrorsAsync backpropagateErrorsAsync)
+            BackpropagateGradientsAsync backpropagateGradientsAsync)
         {
             ConcatenationLayer = concatenationLayer;
-            BackpropagateErrorsAsync = backpropagateErrorsAsync;
+            BackpropagateGradientsAsync = backpropagateGradientsAsync;
 
-            ErrorsArray = new IEnumerable<float>[ConcatenationLayer.Layers.Count()];
+            GradientsArray = new IEnumerable<float>[ConcatenationLayer.Layers.Count()];
         }
 
-        public async Task GatherErrorsAsync(
+        public async Task GatherGradientsAsync(
             INetworkLayer layer,
-            float learningRate,
-            IEnumerable<float> errors,
+            IEnumerable<float> gradients,
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
             int layerIndex = ConcatenationLayer.Layers.IndexOf(layer);
 
-            ErrorsArray[layerIndex] = errors;
+            GradientsArray[layerIndex] = gradients;
 
-            // if all errors have been gathered, backpropagate them to preceeding layer
+            // if all gradients have been gathered, backpropagate them to preceeding layer
             if (Interlocked.Increment(ref completedLayerCount) == ConcatenationLayer.Layers.Count())
             {
-                IEnumerable<float> combinedErrors = ErrorsArray.SelectMany(errors => errors);
+                IEnumerable<float> combinedGradients =
+                    GradientsArray.SelectMany(layerGradients => layerGradients);
 
-                await BackpropagateErrorsAsync(learningRate, combinedErrors, cancellationToken);
+                await BackpropagateGradientsAsync(combinedGradients, cancellationToken);
             }
         }
 
         private ConcatenationLayer ConcatenationLayer { get; }
 
-        private BackpropagateErrorsAsync BackpropagateErrorsAsync { get; }
+        private BackpropagateGradientsAsync BackpropagateGradientsAsync { get; }
 
-        private IEnumerable<float>[] ErrorsArray { get; }
+        private IEnumerable<float>[] GradientsArray { get; }
 
         private volatile int completedLayerCount;
     }

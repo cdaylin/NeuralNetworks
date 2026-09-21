@@ -56,22 +56,19 @@ internal sealed class IdentityTransformationLayer : INetworkLayer
         return Task.FromResult(input);
     }
 
-    public Task<(IEnumerable<float>, BackpropagateErrorsAsync)> FeedForwardAsync(
+    public Task<(IEnumerable<float>, BackpropagateGradientsAsync)> FeedForwardAsync(
         IEnumerable<float> input,
-        BackpropagateErrorsAsync? backpropagateErrorsAsync,
+        BackpropagateGradientsAsync? backpropagateGradientsAsync,
         CancellationToken cancellationToken = default)
     {
-        return Task.FromResult<(IEnumerable<float>, BackpropagateErrorsAsync)>((input, BackpropagateAsync));
+        return Task.FromResult<(IEnumerable<float>, BackpropagateGradientsAsync)>((input, BackpropagateAsync));
 
-        async Task BackpropagateAsync(
-            float learningRate,
-            IEnumerable<float> errors,
-            CancellationToken cancellationToken)
+        async Task BackpropagateAsync(IEnumerable<float> gradients, CancellationToken cancellationToken)
         {
-            if (backpropagateErrorsAsync is null)
+            if (backpropagateGradientsAsync is null)
                 return;
 
-            await backpropagateErrorsAsync(learningRate, errors, cancellationToken);
+            await backpropagateGradientsAsync(gradients, cancellationToken);
         }
     }
 

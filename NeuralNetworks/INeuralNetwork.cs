@@ -4,6 +4,15 @@ using System.Text.Json.Serialization;
 
 namespace Daylin.NeuralNetworks;
 
+/// <summary>
+/// A neural network:  a function from a fixed number of input values to a fixed number of output values, whose
+/// weights can be moved by training.
+/// </summary>
+/// <remarks>
+/// A network carries what it needs to calculate output, and nothing about the course of training that produced
+/// its weights.  All training -- one sample, a batch, an epoch -- is a <see cref="TrainingSession"/>'s, which
+/// holds the network it trains and can be saved and resumed separately from it.
+/// </remarks>
 [JsonPolymorphic]
 [JsonDerivedType(typeof(NeuralNetwork), nameof(NeuralNetwork))]
 public interface INeuralNetwork
@@ -22,11 +31,5 @@ public interface INeuralNetwork
 
     Task<IEnumerable<float>> CalculateOutputAsync(
         IEnumerable<float> input,
-        CancellationToken cancellationToken = default);
-
-    Task TrainAsync(
-        BackpropagationSettings settings,
-        IReadOnlyList<float> input,
-        IReadOnlyList<float> targetOutput,
         CancellationToken cancellationToken = default);
 }

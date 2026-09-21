@@ -24,6 +24,7 @@ public sealed class GlorotUniformWeightInitializer : IConnectionWeightInitialize
         maxRange.ThrowIfNotPositive();
 
         MaxRange = maxRange;
+        Seed = seed;
         SeededRandom = seed is null ? null : new Random(seed.Value);
     }
 
@@ -47,6 +48,12 @@ public sealed class GlorotUniformWeightInitializer : IConnectionWeightInitialize
     /// excessively large range.  This property sets the maximum range allowed. 
     /// </remarks>
     public float MaxRange { get; }
+
+    /// <summary>
+    /// Seed for the random number generator used to generate weights, or <see langword="null"/> when weights are
+    /// drawn from a shared generator that is not seeded.
+    /// </summary>
+    public int? Seed { get; }
 
     /// <inheritdoc cref="IConnectionWeightInitializer.GenerateWeight(int, int)"/>
     public float GenerateWeight(int inConnectionCount, int outConnectionCount)

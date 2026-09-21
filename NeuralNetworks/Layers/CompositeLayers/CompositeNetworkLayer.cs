@@ -28,8 +28,8 @@ internal abstract class CompositeNetworkLayer : INetworkLayer
         IEnumerable<float> input,
         CancellationToken cancellationToken = default);
 
-    public abstract Task<(IEnumerable<float>, BackpropagateErrorsAsync)> FeedForwardAsync(
+    public abstract Task<(IEnumerable<float>, BackpropagateGradientsAsync)> FeedForwardAsync(
         IEnumerable<float> input,
-        BackpropagateErrorsAsync? backpropagateErrorsAsync,
+        BackpropagateGradientsAsync? backpropagateGradientsAsync,
         CancellationToken cancellationToken = default);
 }

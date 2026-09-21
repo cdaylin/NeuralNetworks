@@ -22,6 +22,20 @@ namespace Daylin.NeuralNetworks.Layers.NeuralLayers;
 /// </remarks>
 internal sealed class ConvolutionalLayer : NeuralLayer
 {
+    #region Private Static
+
+    /// <summary>
+    /// Index of the parameter group holding the layer's one shared bias.
+    /// </summary>
+    private static int BiasGroupIndex => 0;
+
+    /// <summary>
+    /// Index of the parameter group holding the layer's one shared set of connection weights.
+    /// </summary>
+    private static int WeightGroupIndex => 1;
+
+    #endregion
+
     #region Construction
 
     public ConvolutionalLayer(
@@ -35,6 +49,7 @@ internal sealed class ConvolutionalLayer : NeuralLayer
             throw new ArgumentException($"Parameter '{inputCount}' must be evenly divisible by '{outputCount}'.");
 
         WeightVector = new float[SpanCount];
+        BiasVector = new float[1];
     }
 
     [JsonConstructor]
@@ -48,7 +63,7 @@ internal sealed class ConvolutionalLayer : NeuralLayer
         : base(inputCount, outputCount, activationFunction, weightInitializer)
     {
         WeightVector = weightVector;
-        Bias = bias;
+        BiasVector = [bias];
     }
 
     #endregion
@@ -68,7 +83,7 @@ internal sealed class ConvolutionalLayer : NeuralLayer
 
     #region Protected
 
-    protected override void InitializeBiases(float bias = 0) => Bias = bias;
+    protected override void InitializeBiases(float bias = 0) => BiasVector[0] = bias;
 
     protected override void InitializeWeights(IEnumerable<int> outgoingConnectionCounts)
     {
@@ -91,8 +106,6 @@ internal sealed class ConvolutionalLayer : NeuralLayer
 
     protected override float GetBias(int outputIndex) => Bias;
 
-    protected override void UpdateBias(int outputIndex, float delta) => Bias += delta;
-
     protected override IEnumerable<float> GetWeights(int outputIndex) => WeightVector;
 
     protected override float GetWeight(int inputIndex, int outputIndex)
@@ -106,12 +119,26 @@ internal sealed class ConvolutionalLayer : NeuralLayer
         return WeightVector[inputIndex % SpanCount];
     }
 
-    protected override void UpdateWeights(int outputIndex, IEnumerable<float> deltas)
+    protected override IReadOnlyList<ParameterGroup> CreateParameterGroups()
     {
+        return [new ParameterGroup(BiasVector), new ParameterGroup(WeightVector)];
+    }
+
+    protected override void AccumulateBiasGradient(int outputIndex, float gradient)
+    {
+        // Every output value shares the one bias, so every output value's gradient accumulates into it.
+        GetGradients(BiasGroupIndex)[0] += gradient;
+    }
+
+    protected override void AccumulateWeightGradients(int outputIndex, IEnumerable<float> gradients)
+    {
+        // Every output value shares the one set of weights, so every span's gradients accumulate into it.
+        float[] weightGradients = GetGradients(WeightGroupIndex);
+
         int weightIndex = 0;
 
-        foreach (float delta in deltas)
-            WeightVector[weightIndex++] += delta;
+        foreach (float gradient in gradients)
+            weightGradients[weightIndex++] += gradient;
     }
 
     #endregion
@@ -121,8 +148,18 @@ internal sealed class ConvolutionalLayer : NeuralLayer
     [JsonInclude]
     private float[] WeightVector { get; }
 
+    /// <summary>
+    /// The bias shared by every output value, held as a vector of one value so that it forms a parameter
+    /// group like any other.
+    /// </summary>
+    [JsonIgnore]
+    private float[] BiasVector { get; }
+
+    /// <summary>
+    /// The bias shared by every output value.
+    /// </summary>
     [JsonInclude]
-    private float Bias { get; set; }
+    private float Bias => BiasVector[0];
 
     #endregion
 }

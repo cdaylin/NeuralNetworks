@@ -36,25 +36,19 @@ internal sealed class ConnectionRoutingLayer : INetworkLayer
         return Task.FromResult(ConnectionMap.MapForward(input));
     }
 
-    public async Task<(IEnumerable<float>, BackpropagateErrorsAsync)> FeedForwardAsync(
+    public async Task<(IEnumerable<float>, BackpropagateGradientsAsync)> FeedForwardAsync(
         IEnumerable<float> input,
-        BackpropagateErrorsAsync? backpropagateErrorsAsync,
+        BackpropagateGradientsAsync? backpropagateGradientsAsync,
         CancellationToken cancellationToken = default)
     {
-        return (await CalculateOutputAsync(input), BackpropagateErrorsAsync);
+        return (await CalculateOutputAsync(input), BackpropagateGradientsAsync);
 
-        async Task BackpropagateErrorsAsync(
-            float learningRate,
-            IEnumerable<float> errors,
-            CancellationToken cancellationToken)
+        async Task BackpropagateGradientsAsync(IEnumerable<float> gradients, CancellationToken cancellationToken)
         {
-            if (backpropagateErrorsAsync is null)
+            if (backpropagateGradientsAsync is null)
                 return;
 
-            await backpropagateErrorsAsync(
-                learningRate,
-                ConnectionMap.MapBackward(errors),
-                cancellationToken);
+            await backpropagateGradientsAsync(ConnectionMap.MapBackward(gradients), cancellationToken);
         }
     }
 

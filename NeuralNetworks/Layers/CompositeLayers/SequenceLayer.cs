@@ -69,9 +69,9 @@ internal sealed class SequenceLayer : CompositeNetworkLayer
         return values;
     }
 
-    public override async Task<(IEnumerable<float>, BackpropagateErrorsAsync)> FeedForwardAsync(
+    public override async Task<(IEnumerable<float>, BackpropagateGradientsAsync)> FeedForwardAsync(
         IEnumerable<float> input,
-        BackpropagateErrorsAsync? backpropagateErrorsAsync,
+        BackpropagateGradientsAsync? backpropagateGradientsAsync,
         CancellationToken cancellationToken = default)
     {
         IEnumerable<float> values = input;
@@ -80,10 +80,10 @@ internal sealed class SequenceLayer : CompositeNetworkLayer
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            (values, backpropagateErrorsAsync) = await layer.FeedForwardAsync(
-                values, backpropagateErrorsAsync, cancellationToken);
+            (values, backpropagateGradientsAsync) = await layer.FeedForwardAsync(
+                values, backpropagateGradientsAsync, cancellationToken);
         }
 
-        return (values, backpropagateErrorsAsync!);
+        return (values, backpropagateGradientsAsync!);
     }
 }

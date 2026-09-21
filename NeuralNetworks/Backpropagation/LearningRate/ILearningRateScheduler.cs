@@ -7,6 +7,7 @@ namespace Daylin.NeuralNetworks.Backpropagation.LearningRate;
 /// </summary>
 [JsonPolymorphic]
 [JsonDerivedType(typeof(ConstantLearningRateScheduler), typeDiscriminator: "Constant")]
+[JsonDerivedType(typeof(ExponentialDecayLearningRateScheduler), typeDiscriminator: "ExponentialDecay")]
 public interface ILearningRateScheduler
 {
     /// <summary>

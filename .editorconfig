@@ -2,6 +2,13 @@
 # what applies to this repository would depend on what sits above the clone.
 root = true
 
+# Editors write LF, so a CRLF file is not created in the first place. The
+# .gitattributes beside this one makes git check out LF; this is the layer
+# that addresses the cause rather than correcting it afterwards. See
+# ContextWiki, Preferences/Git.md.
+[*]
+end_of_line = lf
+
 [*.cs]
 
 # Using directives:  sorted alphabetically and split into groups by root namespace, one blank line

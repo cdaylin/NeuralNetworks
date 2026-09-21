@@ -14,6 +14,23 @@ namespace Daylin.NeuralNetworks.Layers.NeuralLayers;
 /// </remarks>
 internal sealed class DenseLayer : NeuralLayer
 {
+    #region Private Static
+
+    /// <summary>
+    /// Index of the parameter group holding the layer's biases.
+    /// </summary>
+    private static int BiasGroupIndex => 0;
+
+    /// <summary>
+    /// Index of the parameter group holding the connection weights of the first output value.
+    /// </summary>
+    /// <remarks>
+    /// Each output value's weights are a group of their own, in output value order.
+    /// </remarks>
+    private static int FirstWeightGroupIndex => 1;
+
+    #endregion
+
     #region Construction
 
     public DenseLayer(
@@ -74,18 +91,28 @@ internal sealed class DenseLayer : NeuralLayer
 
     protected override float GetBias(int outputIndex) => BiasVector[outputIndex];
 
-    protected override void UpdateBias(int outputIndex, float delta) => BiasVector[outputIndex] += delta;
-
     protected override IEnumerable<float> GetWeights(int outputIndex) => WeightMatrix[outputIndex];
 
     protected override float GetWeight(int inputIndex, int outputIndex) => WeightMatrix[outputIndex][inputIndex];
 
-    protected override void UpdateWeights(int outputIndex, IEnumerable<float> deltas)
+    protected override IReadOnlyList<ParameterGroup> CreateParameterGroups()
     {
+        return [new ParameterGroup(BiasVector), .. WeightMatrix.Select(weights => new ParameterGroup(weights))];
+    }
+
+    protected override void AccumulateBiasGradient(int outputIndex, float gradient)
+    {
+        GetGradients(BiasGroupIndex)[outputIndex] += gradient;
+    }
+
+    protected override void AccumulateWeightGradients(int outputIndex, IEnumerable<float> gradients)
+    {
+        float[] weightGradients = GetGradients(FirstWeightGroupIndex + outputIndex);
+
         int weightIndex = 0;
 
-        foreach (float delta in deltas)
-            WeightMatrix[outputIndex][weightIndex++] += delta;
+        foreach (float gradient in gradients)
+            weightGradients[weightIndex++] += gradient;
     }
 
     #endregion

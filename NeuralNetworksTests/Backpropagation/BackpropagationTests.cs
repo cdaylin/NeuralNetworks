@@ -1,4 +1,6 @@
 ﻿using Daylin.NeuralNetworks.Activation;
+using Daylin.NeuralNetworks.Backpropagation.LearningRate;
+using Daylin.NeuralNetworks.Backpropagation.Optimization;
 using Daylin.NeuralNetworks.WeightInitialization;
 using Daylin.Utilities.Exceptions;
 
@@ -89,6 +91,47 @@ public class BackpropagationTests
             neuronCount: 8,
             activationFunctionName: activationFunctionName,
             seed: seed);
+    }
+
+    [TestMethod]
+    public async Task NetworkTrainedInBatchesByAdamLearnsExclusiveOrAsync()
+    {
+        BackpropagationTestData data = BackpropagationTestData.XOr;
+
+        Random seedSource = new(601);
+
+        NeuralNetworkBuilder networkBuilder = new(data.InputCount);
+
+        networkBuilder.AddDenseLayer(
+            outputCount: 8,
+            activationFunction: ActivationFunctions.Tanh,
+            weightInitializer: new GlorotUniformWeightInitializer(seed: seedSource.Next()));
+
+        networkBuilder.AddDenseLayer(
+            outputCount: data.OutputCount,
+            activationFunction: ActivationFunctions.Tanh,
+            weightInitializer: new GlorotUniformWeightInitializer(seed: seedSource.Next()));
+
+        TrainingSession session = TrainingSession.Start(
+            networkBuilder.BuildNetwork(),
+            new TrainingSettings(
+                CostDerivatives.MeanSquaredError,
+                Optimizers.Adam(),
+                LearningRateSchedulers.ExponentialDecayLearningRateScheduler(0.05f, decayRate: 0.999f)));
+
+        int maxEpochCount = 5000;
+
+        while (!await IsOutputWithinToleranceAsync(session.Network, data.InputData, data.TargetData))
+        {
+            Assert.IsTrue(
+                session.CompletedEpochCount < maxEpochCount,
+                $"The neural network was not successfully trained after {maxEpochCount} epochs.");
+
+            await session.TrainEpochAsync(data.InputData, data.TargetData, batchSize: 2);
+        }
+
+        TestContext!.WriteLine(
+            $"The neural network was successfully trained after {session.CompletedEpochCount} epochs.");
     }
 
     [TestMethod]
@@ -203,7 +246,7 @@ public class BackpropagationTests
     private async Task TestAsync(
         INeuralNetwork neuralNetwork,
         BackpropagationTestData testData,
-        BackpropagationSettings? settings = null,
+        TrainingSettings? settings = null,
         int maxEpochCount = 50000,
         string? networkDescription = null)
     {
@@ -211,9 +254,12 @@ public class BackpropagationTests
         TestContext!.WriteLine(
             $"Starting to train neural network {(networkDescription is null ? "" : $": {networkDescription}")}.");
 
-        settings ??= new BackpropagationSettings(
-            learningRate: .1f,
-            errorFunction: ErrorFunctions.MeanSquaredError);
+        settings ??= new TrainingSettings(
+            CostDerivatives.MeanSquaredError,
+            Optimizers.GradientDescent(),
+            LearningRateSchedulers.ConstantLearningRateScheduler(.1f));
+
+        TrainingSession session = TrainingSession.Adopt(neuralNetwork, settings);
 
         int epochCount = 0;
 
@@ -225,13 +271,10 @@ public class BackpropagationTests
 
             epochCount++;
 
+            // Sample by sample, as this suite has always trained:  the network moves on every sample rather
+            // than once per pass over the data.
             for (int index = 0; index < testData.InputData.Count; index++)
-            {
-                await neuralNetwork.TrainAsync(
-                    settings,
-                    testData.InputData[index],
-                    testData.TargetData[index]);
-            }
+                await session.TrainSampleAsync(testData.InputData[index], testData.TargetData[index]);
         }
 
         TestContext.WriteLine($"The neural network was successfully trained after {epochCount} epochs.");

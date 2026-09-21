@@ -7,20 +7,22 @@ using System.Text.Json.Serialization;
 namespace Daylin.NeuralNetworks.Layers;
 
 /// <summary>
-/// A delegate for backpropagation of errors.
+/// A delegate for backpropagation of cost gradients.
 /// </summary>
 /// <remarks>
-/// The delegate has two responsibilities.  Firstly, it should update the layer (e.g.: adjust connection weights
-/// and biases) with the aim of reducing errors for future input samples.  Secondly, it must continue to
-/// backpropagate errors by invoking the delegate obtained from the previous layer in the network, if one exists.
-/// For improved performance, these two responsibilities should be executed concurrently when practicable.
+/// The delegate has two responsibilities.  Firstly, it should accumulate the gradient of the cost with respect
+/// to each of the layer's parameters (e.g.: connection weights and biases), which is what training moves them
+/// against.  Secondly, it must continue backpropagating by invoking the delegate obtained from the previous
+/// layer in the network, if one exists.  For improved performance, these two responsibilities should be
+/// executed concurrently when practicable.
+/// <para>
+/// Accumulating a gradient does not move the parameter it belongs to.  Parameters move when the network
+/// containing the layer applies the gradients accumulated across all of its layers, which is what allows it
+/// to learn from a batch of samples before it moves at all.
+/// </para>
 /// </remarks>
-/// <param name="learningRate">
-/// The learning rate (a factor used to control the rate at which connection weights and biases are adjusted in
-/// response to errors).
-/// </param>
-/// <param name="errors">
-/// The error attributed to each output value.  The count must equal the layer's 
+/// <param name="gradients">
+/// The partial derivative of the cost with respect to each output value.  The count must equal the layer's
 /// <see cref="INetworkLayer.OutputCount"/>.
 /// </param>
 /// <param name="cancellationToken">
@@ -29,9 +31,8 @@ namespace Daylin.NeuralNetworks.Layers;
 /// <returns>
 /// Returns a task representing this <c>async</c> operation.
 /// </returns>
-public delegate Task BackpropagateErrorsAsync(
-    float learningRate,
-    IEnumerable<float> errors,
+public delegate Task BackpropagateGradientsAsync(
+    IEnumerable<float> gradients,
     CancellationToken cancellationToken);
 
 [JsonPolymorphic]
@@ -107,23 +108,23 @@ public interface INetworkLayer
 
     /// <summary>
     /// Calculates output values for a set of input values, and provides a delegate for the backpropagation of
-    /// errors.
+    /// cost gradients.
     /// </summary>
     /// <param name="input">
     /// Input values.  The length must equal <see cref="InputCount"/>.
     /// </param>
-    /// <param name="backpropagateErrorsAsync">
-    /// A delegate for backpropagating errors to the preceeding layer in the network.
+    /// <param name="backpropagateGradientsAsync">
+    /// A delegate for backpropagating gradients to the preceeding layer in the network.
     /// </param>
     /// <param name="cancellationToken">
     /// A cancellation token.
     /// </param>
     /// <returns>
     /// Returns two values.  First is a list of output values, with length equal to <see cref="OutputCount"/>.
-    /// Second is a delegate for backpropagating errors to this layer.
+    /// Second is a delegate for backpropagating gradients to this layer.
     /// </returns>
-    Task<(IEnumerable<float>, BackpropagateErrorsAsync)> FeedForwardAsync(
+    Task<(IEnumerable<float>, BackpropagateGradientsAsync)> FeedForwardAsync(
         IEnumerable<float> input,
-        BackpropagateErrorsAsync? backpropagateErrorsAsync,
+        BackpropagateGradientsAsync? backpropagateGradientsAsync,
         CancellationToken cancellationToken = default);
 }

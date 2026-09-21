@@ -76,9 +76,9 @@ internal abstract class NeuralLayer : INetworkLayer
         return output;
     }
 
-    public virtual async Task<(IEnumerable<float>, BackpropagateErrorsAsync)> FeedForwardAsync(
+    public virtual async Task<(IEnumerable<float>, BackpropagateGradientsAsync)> FeedForwardAsync(
         IEnumerable<float> input,
-        BackpropagateErrorsAsync? backpropagateErrorsAsync,
+        BackpropagateGradientsAsync? backpropagateGradientsAsync,
         CancellationToken cancellationToken = default)
     {
         float[] output = new float[OutputCount];
@@ -97,14 +97,13 @@ internal abstract class NeuralLayer : INetworkLayer
                 return ValueTask.CompletedTask;
             });
 
-        return (output, (learningRate, errors, cancellationToken) =>
-            BackpropagateErrorsAsync(
-                learningRate,
-                errors,
+        return (output, (gradients, cancellationToken) =>
+            BackpropagateGradientsAsync(
+                gradients,
                 input,
                 output,
                 derivatives,
-                backpropagateErrorsAsync,
+                backpropagateGradientsAsync,
                 cancellationToken));
     }
 
@@ -117,6 +116,39 @@ internal abstract class NeuralLayer : INetworkLayer
 
     [JsonInclude]
     protected IConnectionWeightInitializer WeightInitializer { get; }
+
+    /// <summary>
+    /// The layer's parameters, grouped as the optimizer keeps state for them.
+    /// </summary>
+    /// <remarks>
+    /// The groups hold the layer's own arrays by reference, so moving a group's parameters moves the layer's
+    /// weights or biases.
+    /// </remarks>
+    internal IReadOnlyList<ParameterGroup> ParameterGroups => field ??= CreateParameterGroups();
+
+    /// <summary>
+    /// Creates the groups the layer's parameters are kept in.
+    /// </summary>
+    /// <remarks>
+    /// Called once, when the groups are first needed.  An implementation returns groups holding its parameter
+    /// arrays by reference, in an order it keeps for the life of the layer:  the optimizer's state is stored
+    /// against that order and restored into it.
+    /// </remarks>
+    /// <returns>
+    /// Returns the layer's parameter groups.
+    /// </returns>
+    protected abstract IReadOnlyList<ParameterGroup> CreateParameterGroups();
+
+    /// <summary>
+    /// Returns the gradients accumulated for a group of parameters.
+    /// </summary>
+    /// <param name="groupIndex">
+    /// Index of the group, in the order <see cref="CreateParameterGroups"/> returned.
+    /// </param>
+    /// <returns>
+    /// Returns the gradient accumulated for each parameter in the group.
+    /// </returns>
+    protected float[] GetGradients(int groupIndex) => ParameterGroups[groupIndex].Gradients;
 
     protected abstract void InitializeBiases(float bias = 0);
 
@@ -148,7 +180,20 @@ internal abstract class NeuralLayer : INetworkLayer
 
     protected abstract float GetBias(int outputIndex);
 
-    protected abstract void UpdateBias(int outputIndex, float delta);
+    /// <summary>
+    /// Accumulates the gradient of the cost with respect to the bias of an output value.
+    /// </summary>
+    /// <remarks>
+    /// Where a layer shares one bias among several output values, every output value's gradient accumulates
+    /// into that one bias.
+    /// </remarks>
+    /// <param name="outputIndex">
+    /// Output value index.
+    /// </param>
+    /// <param name="gradient">
+    /// The amount the bias is owed, before the learning rate.
+    /// </param>
+    protected abstract void AccumulateBiasGradient(int outputIndex, float gradient);
 
     /// <summary>
     /// Enumerates weights for connections between input values and an output value.
@@ -182,16 +227,21 @@ internal abstract class NeuralLayer : INetworkLayer
     protected abstract float GetWeight(int inputIndex, int outputIndex);
 
     /// <summary>
-    /// Updates weights for connections between input values and an output value.
+    /// Accumulates the gradients of the cost with respect to the weights of the connections between input
+    /// value.
     /// </summary>
+    /// <remarks>
+    /// Where a layer shares one set of weights among several output values, every output value's gradients
+    /// accumulate into that one set.
+    /// </remarks>
     /// <param name="outputIndex">
     /// Output value index.
     /// </param>
-    /// <param name="deltas">
-    /// Sequence of values to add to connection weights, with one value for each input value that is connected
-    /// to the output value.
+    /// <param name="gradients">
+    /// The amount each connection weight is owed before the learning rate, with one value for each input value
+    /// that is connected to the output value.
     /// </param>
-    protected abstract void UpdateWeights(int outputIndex, IEnumerable<float> deltas);
+    protected abstract void AccumulateWeightGradients(int outputIndex, IEnumerable<float> gradients);
 
     protected virtual float CalculateOutput(IEnumerable<float> input, int outputIndex)
     {
@@ -209,73 +259,83 @@ internal abstract class NeuralLayer : INetworkLayer
         return weightedSum + GetBias(outputIndex);
     }
 
-    protected virtual async Task BackpropagateErrorsAsync(
-        float learningRate,
-        IEnumerable<float> errors,
+    protected virtual async Task BackpropagateGradientsAsync(
+        IEnumerable<float> gradients,
         IEnumerable<float> input,
         IReadOnlyList<float> output,
         IReadOnlyList<float> activationDerivatives,
-        BackpropagateErrorsAsync? backpropagateErrorsAsync,
+        BackpropagateGradientsAsync? backpropagateGradientsAsync,
         CancellationToken cancellationToken)
     {
-        // force enumeration, so that error calculations complete before weights are updated
-        IReadOnlyList<float> outputErrors = errors.ElementwiseProduct(activationDerivatives).ToList();
+        // force enumeration, so that the gradients are calculated once here rather than once per reader
+        IReadOnlyList<float> outputGradients = gradients.ElementwiseProduct(activationDerivatives).ToList();
 
         Task? backpropagationTask = null;
 
-        if (backpropagateErrorsAsync is not null)
+        if (backpropagateGradientsAsync is not null)
         {
-            // force enumeration, so that error calculations complete before weights are updated
-            IReadOnlyList<float> inputErrors = CalculateInputErrors(outputErrors).ToList();
+            // force enumeration, so that the calculation completes on this thread rather than on the one
+            //  backpropagating to the preceding layer
+            IReadOnlyList<float> inputGradients = CalculateInputGradients(outputGradients).ToList();
 
             // force backpropagation to the preceding layer to run asynchronously, so that it will run
-            //  concurrently with weight updates
+            //  concurrently with this layer's accumulation
             backpropagationTask = SynchronizationContexts.ThreadPoolContext.EnqueueAsync(
-                () => backpropagateErrorsAsync(learningRate, inputErrors, cancellationToken));
+                () => backpropagateGradientsAsync(inputGradients, cancellationToken));
         }
 
-        UpdateWeightsAndBiases(
-            learningRate,
-            input,
-            output,
-            outputErrors);
+        AccumulateGradients(input, output, outputGradients);
 
         if (backpropagationTask is not null)
             await backpropagationTask;
     }
 
-    protected virtual IEnumerable<float> CalculateInputErrors(IReadOnlyList<float> outputErrors)
+    protected virtual IEnumerable<float> CalculateInputGradients(IReadOnlyList<float> outputGradients)
     {
         for (int inputIndex = 0; inputIndex < InputCount; inputIndex++)
         {
             float sum = 0;
 
             for (int outputIndex = 0; outputIndex < OutputCount; outputIndex++)
-                sum += outputErrors[outputIndex] * GetWeight(inputIndex, outputIndex);
+                sum += outputGradients[outputIndex] * GetWeight(inputIndex, outputIndex);
 
             yield return sum;
         }
     }
 
-    protected virtual void UpdateWeightsAndBiases(
-        float learningRate,
+    /// <summary>
+    /// Accumulates the gradient of the cost with respect to each of the layer's parameters, for one sample.
+    /// </summary>
+    /// <remarks>
+    /// A gradient is accumulated rather than applied, so that a layer can learn from several samples before
+    /// its parameters move.  A bias takes its output value's gradient; a connection weight takes that gradient
+    /// multiplied by the input value the connection carries.
+    /// </remarks>
+    /// <param name="input">
+    /// The input values the layer calculated its output from.
+    /// </param>
+    /// <param name="output">
+    /// The output values the layer calculated.
+    /// </param>
+    /// <param name="outputGradients">
+    /// The gradient of the cost with respect to each output value, multiplied by its activation derivative.
+    /// </param>
+    protected virtual void AccumulateGradients(
         IEnumerable<float> input,
         IReadOnlyList<float> output,
-        IReadOnlyList<float> outputErrors)
+        IReadOnlyList<float> outputGradients)
     {
-        outputErrors.Count.ThrowIfNotEqualTo(OutputCount);
+        outputGradients.Count.ThrowIfNotEqualTo(OutputCount);
 
         int outputIndex = 0;
 
         // for each output value
-        foreach (float error in outputErrors)
+        foreach (float gradient in outputGradients)
         {
-            float deltaFactor = learningRate * error;
+            AccumulateBiasGradient(outputIndex, gradient);
 
-            UpdateBias(outputIndex, deltaFactor);
-
-            // update connection weights
-            UpdateWeights(outputIndex, GetInput(outputIndex, input).ScalarProduct(deltaFactor));
+            // accumulate gradients for connection weights
+            AccumulateWeightGradients(outputIndex, GetInput(outputIndex, input).ScalarProduct(gradient));
 
             outputIndex += 1;
         }
