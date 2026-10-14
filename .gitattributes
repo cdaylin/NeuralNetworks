@@ -6,8 +6,8 @@
 # the file unchanged. The Git-for-Windows default core.autocrlf=true does not
 # have it: LF goes into the repository and CRLF comes back out, so a file a
 # tool has just written and the same file after a checkout differ in every
-# line. That cost Crucible a task hash that reported a change where there was
-# none. See ContextWiki, Preferences/Git.md.
+# line, which has cost a content hash that reported a change where there was
+# none.
 #
 # The companion .editorconfig asks editors to write LF in the first place,
 # which is the part that addresses the cause rather than converting after it.
