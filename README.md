@@ -31,12 +31,14 @@ neurons with a small fan-in the raw formula produces an excessively wide interva
 
 **Training.**  Backpropagation gathers each parameter's gradient on the way back, and a
 `TrainingSession` turns those gradients into steps:  one sample at a time, a batch averaged over its
-samples, or an epoch taken in batches.  Plain gradient descent, momentum, and Adam sit behind one
-optimizer interface, with a learning rate that can decay from epoch to epoch and an optional limit on
-the norm of a batch's gradients.  The session holds the optimizer's state and the epoch count, and
-saves them with the network so training can resume where it stopped; a network saved on its own
-carries nothing about training.  Training is reproducible to the last bit:  the same starting weights,
-settings, and samples leave the same weights every time.
+samples, or an epoch taken in batches.  Each of those returns the cost of what it learned from, so a
+caller can watch training work.  Plain gradient descent, momentum, and Adam sit behind one optimizer
+interface, with a learning rate that can decay from epoch to epoch and an optional limit on the norm
+of a batch's gradients.  The session holds the optimizer's state and the epoch count, and saves them
+with the network so training can resume where it stopped; a network saved on its own carries nothing
+about training.  Training is reproducible to the last bit within one build of the library:  the same
+starting weights, settings, and samples leave the same weights, run after run in one process.  It is
+not promised across releases, nor against the arithmetic of an earlier version.
 
 ## Using it
 
@@ -47,6 +49,7 @@ exclusive-or, the smallest problem a network without a hidden layer cannot solve
 using Daylin.NeuralNetworks;
 using Daylin.NeuralNetworks.Activation;
 using Daylin.NeuralNetworks.Backpropagation;
+using Daylin.NeuralNetworks.Backpropagation.Cost;
 using Daylin.NeuralNetworks.Backpropagation.LearningRate;
 using Daylin.NeuralNetworks.Backpropagation.Optimization;
 using Daylin.NeuralNetworks.WeightInitialization;
@@ -66,7 +69,7 @@ builder.AddDenseLayer(
 INeuralNetwork network = builder.BuildNetwork();
 
 TrainingSettings settings = new(
-    costDerivative: CostDerivatives.MeanSquaredError,
+    costFunction: CostFunctions.MeanSquaredError,
     optimizer: Optimizers.Adam(),
     learningRateScheduler: LearningRateSchedulers.ConstantLearningRateScheduler(0.05f));
 
@@ -76,7 +79,12 @@ float[][] inputs = [[0, 0], [0, 1], [1, 0], [1, 1]];
 float[][] targets = [[0], [1], [1], [0]];
 
 for (int epoch = 0; epoch < 200; epoch++)
-    await session.TrainEpochAsync(inputs, targets, batchSize: 4);
+{
+    float cost = await session.TrainEpochAsync(inputs, targets, batchSize: 4);
+
+    if (epoch % 50 == 0)
+        Console.WriteLine($"epoch {epoch}: cost {cost:F4}");
+}
 
 foreach (float[] input in inputs)
 {
@@ -89,8 +97,12 @@ foreach (float[] input in inputs)
 which prints roughly:
 
 ```
+epoch 0: cost 0.3657
+epoch 50: cost 0.0312
+epoch 100: cost 0.0001
+epoch 150: cost 0.0001
 0 xor 0 -> 0.00
-0 xor 1 -> 0.98
+0 xor 1 -> 0.99
 1 xor 0 -> 0.98
 1 xor 1 -> 0.00
 ```
@@ -116,19 +128,42 @@ dotnet build
 dotnet test
 ```
 
-The test suite trains 24 networks to convergence -- every activation function against identity, NOT,
-AND, and exclusive-or, plus four deeper architectures -- and asserts that each one learns the function
-within a bounded number of epochs.  Its other tests state exact results rather than convergence:  the
+The test suite trains 25 networks to convergence -- every activation function against identity, NOT,
+AND, and exclusive-or, four deeper architectures, and one trained in batches by Adam -- and asserts
+that each one learns the function within a bounded number of epochs.  Its other tests state exact results rather than convergence:  the
 weights one training step leaves in each layer type, each optimizer's formula, how a batch averages,
-the learning-rate schedules, gradient clipping, what a saved network and a saved session carry, and
-that training the same network on the same samples twice leaves the same bits.  All 106 run in a few
-seconds.
+the learning-rate schedules, gradient clipping, what a saved network and a saved session carry, that
+training the same network on the same samples twice leaves the same bits, and what training does with
+a step that fails, a gradient that is not a number, and state saved for a network of another shape.
+All 146 run in a few seconds.
 
 Every network is built from a **seeded** weight initializer, so each run trains exactly the same
 networks and a failure is a real signal rather than an unlucky draw.  The seeds are arbitrary and
 meant to stay that way:  one chosen because it passes would prove only that it still passes, and would
 hide a regression that broke most other seeds.  When a seed fails, the configuration is what should
 change — which is how the ReLU layer came to be sized as it is.
+
+## What changed for anyone who compiled against the previous release
+
+The training API was reworked in September 2026, and these are the changes that break a caller or a
+saved file:
+
+- `ICostDerivative` is now `ICostFunction` in `Daylin.NeuralNetworks.Backpropagation.Cost`, and it
+  calculates the cost as well as its derivative.  `CostDerivatives.MeanSquaredError` is
+  `CostFunctions.MeanSquaredError`, and `TrainingSettings` takes a `costFunction`.
+- **A session saved by an earlier release cannot be resumed**, because its settings name a
+  `CostDerivative` where a `CostFunction` is now read;  `TrainingSession.Resume` says so rather than
+  failing obscurely.  The weights are not lost:  `TrainingSession.ReadNetwork` takes the network out
+  of such a document, and a session can be started from it under new settings.
+- `TrainSampleAsync`, `TrainBatchAsync` and `TrainEpochAsync` return the cost of what they learned
+  from rather than nothing.
+- `Optimizers.GradientDescent` is a property rather than a method, since it holds nothing.
+- `IOptimizer.ApplyGradients` takes the gradients as a `ReadOnlySpan<float>`, and an optimizer is
+  handed only state of its own kind, sized for the group it is stepping.  A state records nothing
+  else, so two optimizers of one kind with different hyperparameters accept one another's state and
+  continuing from it is a warm restart rather than an error.
+- A learning rate must be positive wherever it comes from, including a schedule that has decayed far
+  enough to reach zero -- which the session refuses when it reads the rate, naming the schedule.
 
 ## Why the hidden layers are sized as they are
 
@@ -166,9 +201,9 @@ At that commit it was about 3,300 lines of C#, with about 350 lines of tests.
 Since then it has grown substantially, and most of that growth was written by Claude Code at my
 direction.  Batch training, the three optimizers, the learning-rate schedules, the training session
 and what it saves, gradient clipping, and nearly all of the tests came that way, most of it in
-September 2026.  The library is now about 4,900 lines and its tests about 3,500.  I set the
-requirements, made the design decisions, and reviewed the work; the code for those additions is
-largely Claude's.
+September 2026, with three rounds of review and repair over it since.  The library is now about
+5,800 lines and its tests about 5,300.  I set the requirements, made the design decisions, and
+reviewed the work; the code for those additions is largely Claude's.
 
 ## About this repository
 

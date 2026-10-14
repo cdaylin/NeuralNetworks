@@ -14,23 +14,6 @@ namespace Daylin.NeuralNetworks.Layers.NeuralLayers;
 /// </remarks>
 internal sealed class DenseLayer : NeuralLayer
 {
-    #region Private Static
-
-    /// <summary>
-    /// Index of the parameter group holding the layer's biases.
-    /// </summary>
-    private static int BiasGroupIndex => 0;
-
-    /// <summary>
-    /// Index of the parameter group holding the connection weights of the first output value.
-    /// </summary>
-    /// <remarks>
-    /// Each output value's weights are a group of their own, in output value order.
-    /// </remarks>
-    private static int FirstWeightGroupIndex => 1;
-
-    #endregion
-
     #region Construction
 
     public DenseLayer(
@@ -58,6 +41,17 @@ internal sealed class DenseLayer : NeuralLayer
         float[][] weightMatrix)
         : base(inputCount, outputCount, activationFunction, weightInitializer)
     {
+        // Checked here rather than where a weight is first read:  a document whose arrays do not fit its counts
+        //  otherwise builds a layer that answers and then fails partway through a training batch.
+        biasVector.ThrowIfNull();
+        biasVector.Length.ThrowIfNotEqualTo(outputCount);
+        weightMatrix.ThrowIfNull();
+        weightMatrix.ThrowIfContainsNull();
+        weightMatrix.Length.ThrowIfNotEqualTo(outputCount);
+
+        foreach (float[] weights in weightMatrix)
+            weights.Length.ThrowIfNotEqualTo(inputCount);
+
         BiasVector = biasVector;
         WeightMatrix = weightMatrix;
     }
@@ -95,25 +89,10 @@ internal sealed class DenseLayer : NeuralLayer
 
     protected override float GetWeight(int inputIndex, int outputIndex) => WeightMatrix[outputIndex][inputIndex];
 
-    protected override IReadOnlyList<ParameterGroup> CreateParameterGroups()
-    {
-        return [new ParameterGroup(BiasVector), .. WeightMatrix.Select(weights => new ParameterGroup(weights))];
-    }
+    protected override ParameterGroup CreateBiasGroup() => new(BiasVector);
 
-    protected override void AccumulateBiasGradient(int outputIndex, float gradient)
-    {
-        GetGradients(BiasGroupIndex)[outputIndex] += gradient;
-    }
-
-    protected override void AccumulateWeightGradients(int outputIndex, IEnumerable<float> gradients)
-    {
-        float[] weightGradients = GetGradients(FirstWeightGroupIndex + outputIndex);
-
-        int weightIndex = 0;
-
-        foreach (float gradient in gradients)
-            weightGradients[weightIndex++] += gradient;
-    }
+    protected override IReadOnlyList<ParameterGroup> CreateWeightGroups() =>
+        [.. WeightMatrix.Select(weights => new ParameterGroup(weights))];
 
     #endregion
 

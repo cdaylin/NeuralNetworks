@@ -31,7 +31,7 @@ public sealed class MomentumOptimizer : IOptimizer
     #region Public
 
     /// <inheritdoc cref="IOptimizer.ShortName"/>
-    public string ShortName => "Momentum";
+    public string ShortName => Discriminator;
 
     /// <inheritdoc cref="IOptimizer.LongName"/>
     public string LongName => "Gradient Descent with Momentum";
@@ -49,19 +49,19 @@ public sealed class MomentumOptimizer : IOptimizer
 
     /// <inheritdoc cref="IOptimizer.CanApplyTo(IOptimizerState?, int)"/>
     public bool CanApplyTo(IOptimizerState? state, int parameterCount) =>
-        state is MomentumOptimizerState && state.ParameterCount == parameterCount;
+        OptimizerStateGuard.IsStateFor<MomentumOptimizerState>(state, parameterCount);
 
-    /// <inheritdoc cref="IOptimizer.ApplyGradients(IOptimizerState?, float[], IReadOnlyList{float}, float)"/>
+    /// <inheritdoc cref="IOptimizer.ApplyGradients(IOptimizerState?, float[], ReadOnlySpan{float}, float)"/>
     public void ApplyGradients(
         IOptimizerState? state,
         float[] parameters,
-        IReadOnlyList<float> gradients,
+        ReadOnlySpan<float> gradients,
         float learningRate)
     {
-        parameters.ThrowIfNull();
-        gradients.Count.ThrowIfNotEqualTo(parameters.Length);
+        OptimizerStateGuard.RequireOneGradientPerParameter(parameters, gradients);
 
-        float[] velocities = ((MomentumOptimizerState)state!).Velocities;
+        float[] velocities =
+            OptimizerStateGuard.Require<MomentumOptimizerState>(state, parameters.Length, ShortName).Velocities;
 
         for (int index = 0; index < parameters.Length; index++)
         {
@@ -70,6 +70,15 @@ public sealed class MomentumOptimizer : IOptimizer
             parameters[index] -= learningRate * velocities[index];
         }
     }
+
+    #endregion
+
+    #region Internal
+
+    /// <summary>
+    /// The name this optimizer is written under in a saved session, and its <see cref="ShortName"/>.
+    /// </summary>
+    internal const string Discriminator = "Momentum";
 
     #endregion
 }

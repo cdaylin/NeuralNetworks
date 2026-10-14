@@ -87,7 +87,8 @@ internal sealed class ConcatenationLayer : CompositeNetworkLayer
 
         // feed-forward through contained layers
         List<(IEnumerable<float>, BackpropagateGradientsAsync)> feedForwardResults =
-            await FeedForwardThroughContainedLayersAsync(input, backpropagationHandler, cancellationToken).ToListAsync();
+            await FeedForwardThroughContainedLayersAsync(input, backpropagationHandler, cancellationToken)
+                .ToListAsync();
 
         // reassemble output from contained layers
         IEnumerable<float> output = feedForwardResults.SelectMany(result => result.Item1);
@@ -128,15 +129,20 @@ internal sealed class ConcatenationLayer : CompositeNetworkLayer
             [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         int skipCount = 0;
+        int layerIndex = 0;
 
         foreach (INetworkLayer layer in Layers)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
+            // The layer's position, captured for the delegate:  a layer reports its gradients by where it sits
+            //  rather than by which layer it is, so one layer held twice would still be two sets of gradients.
+            int gatheringIndex = layerIndex;
+
             BackpropagateGradientsAsync? backpropagateAsync = backpropagationHandler is null
                 ? null
                 : (gradients, cancellationToken) => backpropagationHandler.GatherGradientsAsync(
-                    layer, gradients, cancellationToken);
+                    gatheringIndex, gradients, cancellationToken);
 
             IEnumerable<float> layerInput = input.Skip(skipCount).Take(layer.InputCount);
 
@@ -146,6 +152,7 @@ internal sealed class ConcatenationLayer : CompositeNetworkLayer
                 cancellationToken);
 
             skipCount += layer.InputCount;
+            layerIndex += 1;
         }
     }
 
@@ -172,7 +179,7 @@ internal sealed class ConcatenationLayer : CompositeNetworkLayer
 
     /// <summary>
     /// Responsible for gathering gradients backpropagated from all contained layers and then backpropagating
-    /// them to the preceeding layer.
+    /// them to the preceding layer.
     /// </summary>
     private class GradientBackpropagationHandler
     {
@@ -187,17 +194,15 @@ internal sealed class ConcatenationLayer : CompositeNetworkLayer
         }
 
         public async Task GatherGradientsAsync(
-            INetworkLayer layer,
+            int layerIndex,
             IEnumerable<float> gradients,
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            int layerIndex = ConcatenationLayer.Layers.IndexOf(layer);
-
             GradientsArray[layerIndex] = gradients;
 
-            // if all gradients have been gathered, backpropagate them to preceeding layer
+            // if all gradients have been gathered, backpropagate them to preceding layer
             if (Interlocked.Increment(ref completedLayerCount) == ConcatenationLayer.Layers.Count())
             {
                 IEnumerable<float> combinedGradients =

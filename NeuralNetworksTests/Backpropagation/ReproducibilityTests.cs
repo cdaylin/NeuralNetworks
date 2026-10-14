@@ -1,4 +1,5 @@
-using Daylin.NeuralNetworks.Activation;
+﻿using Daylin.NeuralNetworks.Activation;
+using Daylin.NeuralNetworks.Backpropagation.Cost;
 using Daylin.NeuralNetworks.Backpropagation.LearningRate;
 using Daylin.NeuralNetworks.Backpropagation.Optimization;
 using Daylin.NeuralNetworks.Serialization;
@@ -16,7 +17,7 @@ namespace Daylin.NeuralNetworks.Backpropagation;
 /// multiplied, moves the last bit, and a later release is free to change either.
 /// <para>
 /// Each case trains a network holding every layer type, and a convolutional layer whose shared weights are
-/// owed by several spans, since those are where a sum has an order to get wrong.  The training runs through
+/// owned by several spans, since those are where a sum has an order to get wrong.  The training runs through
 /// epochs, a ragged last batch, and a single sample, under a decaying rate.  Running it several times within
 /// one process catches an order that depends on how threads were scheduled; an order that depends on the
 /// process is not caught here.
@@ -34,16 +35,23 @@ public class ReproducibilityTests
     #region Public
 
     [TestMethod]
-    [DataRow("GradientDescent")]
-    [DataRow("Momentum")]
-    [DataRow("Adam")]
-    public async Task TrainingTheSameNetworkOnTheSameSamplesLeavesTheSameBitsAsync(string optimizerName)
+    [DataRow("GradientDescent", null)]
+    [DataRow("Momentum", null)]
+    [DataRow("Adam", null)]
+    [DataRow("GradientDescent", 0.05f)]
+    [DataRow("Adam", 0.05f)]
+    public async Task TrainingTheSameNetworkOnTheSameSamplesLeavesTheSameBitsAsync(
+        string optimizerName,
+        float? maxGradientNorm)
     {
-        IReadOnlyList<int> expectedBits = await TrainAsync(optimizerName);
+        // A limit on the norm is the one setting that makes every parameter's step depend on every other
+        //  parameter's gradient, through a sum over the whole network:  a summation order that varied between
+        //  runs would show here and nowhere else.
+        IReadOnlyList<int> expectedBits = await TrainAsync(optimizerName, maxGradientNorm);
 
         for (int repeatIndex = 1; repeatIndex < RepeatCount; repeatIndex++)
         {
-            IReadOnlyList<int> actualBits = await TrainAsync(optimizerName);
+            IReadOnlyList<int> actualBits = await TrainAsync(optimizerName, maxGradientNorm);
 
             Assert.AreEqual(expectedBits.Count, actualBits.Count, "Count of parameters.");
 
@@ -65,7 +73,7 @@ public class ReproducibilityTests
     {
         return name switch
         {
-            "GradientDescent" => Optimizers.GradientDescent(),
+            "GradientDescent" => Optimizers.GradientDescent,
             "Momentum" => Optimizers.Momentum(),
             "Adam" => Optimizers.Adam(),
             _ => throw new ArgumentOutOfRangeException(nameof(name), name, "Unknown optimizer."),
@@ -78,10 +86,13 @@ public class ReproducibilityTests
     /// <param name="optimizerName">
     /// The optimizer to train with.
     /// </param>
+    /// <param name="maxGradientNorm">
+    /// The largest the norm of a batch's gradients may be, or <see langword="null"/> for no limit.
+    /// </param>
     /// <returns>
     /// Returns the bit pattern of every weight and bias of every network, in a fixed order.
     /// </returns>
-    private async Task<IReadOnlyList<int>> TrainAsync(string optimizerName)
+    private async Task<IReadOnlyList<int>> TrainAsync(string optimizerName, float? maxGradientNorm)
     {
         List<int> bits = [];
 
@@ -90,9 +101,10 @@ public class ReproducibilityTests
             TrainingSession session = TrainingSession.Adopt(
                 network,
                 new TrainingSettings(
-                    CostDerivatives.MeanSquaredError,
+                    CostFunctions.MeanSquaredError,
                     GetOptimizer(optimizerName),
-                    LearningRateSchedulers.ExponentialDecayLearningRateScheduler(0.05f, decayRate: 0.9f)));
+                    LearningRateSchedulers.ExponentialDecayLearningRateScheduler(0.05f, decayRate: 0.9f),
+                    maxGradientNorm));
 
             // Seeded, so every repeat draws the same samples.
             Random random = new(7);
@@ -130,7 +142,8 @@ public class ReproducibilityTests
     internal static IReadOnlyList<IReadOnlyList<float>> CreateSamples(Random random, int valueCount)
     {
         return [.. Enumerable.Range(0, 20).Select(_ =>
-            (IReadOnlyList<float>)[.. Enumerable.Range(0, valueCount).Select(_ => (float)((random.NextDouble() * 2) - 1))])];
+            (IReadOnlyList<float>)
+                [.. Enumerable.Range(0, valueCount).Select(_ => (float)((random.NextDouble() * 2) - 1))])];
     }
 
     /// <summary>
@@ -161,7 +174,11 @@ public class ReproducibilityTests
                 maskBuilder.Build(),
                 ActivationFunctions.Eanaf,
                 new GlorotUniformWeightInitializer(seed: 32)),
-            factory.CreateConvolutionalLayer(3, 1, ActivationFunctions.Softsign, new GlorotUniformWeightInitializer(seed: 33)));
+            factory.CreateConvolutionalLayer(
+                3,
+                1,
+                ActivationFunctions.Softsign,
+                new GlorotUniformWeightInitializer(seed: 33)));
 
         NeuralNetworkBuilder builder = new(inputCount: 8);
 

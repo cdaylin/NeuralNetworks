@@ -25,14 +25,32 @@ internal sealed class ConvolutionalLayer : NeuralLayer
     #region Private Static
 
     /// <summary>
-    /// Index of the parameter group holding the layer's one shared bias.
+    /// Refuses a layer whose input values do not divide evenly among its output values.
     /// </summary>
-    private static int BiasGroupIndex => 0;
+    /// <remarks>
+    /// Every output value spans the same number of input values, so a remainder would leave input values no
+    /// output value is connected to.  Called from both constructors, since the invariant belongs to the layer
+    /// rather than to one way of building it.
+    /// </remarks>
+    /// <param name="inputCount">
+    /// Number of values fed into the layer.
+    /// </param>
+    /// <param name="outputCount">
+    /// Number of values output from the layer.
+    /// </param>
+    /// <exception cref="ArgumentException">
+    /// The input count is not a whole multiple of the output count.
+    /// </exception>
+    private static void ThrowIfSpansDoNotDivide(int inputCount, int outputCount)
+    {
+        if (inputCount % outputCount == 0)
+            return;
 
-    /// <summary>
-    /// Index of the parameter group holding the layer's one shared set of connection weights.
-    /// </summary>
-    private static int WeightGroupIndex => 1;
+        throw new ArgumentException(
+            $"A convolutional layer spans its {inputCount} input values evenly across its {outputCount} output "
+            + $"values, which leaves {inputCount % outputCount} of them unconnected.",
+            nameof(inputCount));
+    }
 
     #endregion
 
@@ -45,8 +63,7 @@ internal sealed class ConvolutionalLayer : NeuralLayer
         IConnectionWeightInitializer weightInitializer)
         : base(inputCount, outputCount, activationFunction, weightInitializer)
     {
-        if (inputCount % outputCount != 0)
-            throw new ArgumentException($"Parameter '{inputCount}' must be evenly divisible by '{outputCount}'.");
+        ThrowIfSpansDoNotDivide(inputCount, outputCount);
 
         WeightVector = new float[SpanCount];
         BiasVector = new float[1];
@@ -62,6 +79,14 @@ internal sealed class ConvolutionalLayer : NeuralLayer
         float bias)
         : base(inputCount, outputCount, activationFunction, weightInitializer)
     {
+        // The same two checks the other constructor makes, because a document is as able to disagree with the
+        //  counts beside it as a caller is:  inputs that do not divide among the outputs would build a layer
+        //  that silently never connects the remainder, and a weight vector that does not span the layer would
+        //  build one that answers and then fails partway through a training batch.
+        ThrowIfSpansDoNotDivide(inputCount, outputCount);
+        weightVector.ThrowIfNull();
+        weightVector.Length.ThrowIfNotEqualTo(SpanCount);
+
         WeightVector = weightVector;
         BiasVector = [bias];
     }
@@ -74,7 +99,7 @@ internal sealed class ConvolutionalLayer : NeuralLayer
     public override string ShortDescription => $"(Convolutional, {OutputCount}, {ActivationFunction.ShortName})";
 
     /// <summary>
-    /// Number of consecutive input values connected to each ouput value.
+    /// Number of consecutive input values connected to each output value.
     /// </summary>
     [JsonIgnore]
     public int SpanCount => InputCount / OutputCount;
@@ -119,26 +144,17 @@ internal sealed class ConvolutionalLayer : NeuralLayer
         return WeightVector[inputIndex % SpanCount];
     }
 
-    protected override IReadOnlyList<ParameterGroup> CreateParameterGroups()
-    {
-        return [new ParameterGroup(BiasVector), new ParameterGroup(WeightVector)];
-    }
+    protected override ParameterGroup CreateBiasGroup() => new(BiasVector);
+
+    protected override IReadOnlyList<ParameterGroup> CreateWeightGroups() => [new ParameterGroup(WeightVector)];
+
+    // Every output value shares the one set of weights, so every span's gradients accumulate into it.
+    protected override ParameterGroup GetWeightGroup(int outputIndex) => WeightGroups[0];
 
     protected override void AccumulateBiasGradient(int outputIndex, float gradient)
     {
         // Every output value shares the one bias, so every output value's gradient accumulates into it.
-        GetGradients(BiasGroupIndex)[0] += gradient;
-    }
-
-    protected override void AccumulateWeightGradients(int outputIndex, IEnumerable<float> gradients)
-    {
-        // Every output value shares the one set of weights, so every span's gradients accumulate into it.
-        float[] weightGradients = GetGradients(WeightGroupIndex);
-
-        int weightIndex = 0;
-
-        foreach (float gradient in gradients)
-            weightGradients[weightIndex++] += gradient;
+        BiasGroup.AccumulateGradient(0, gradient);
     }
 
     #endregion

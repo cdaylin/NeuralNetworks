@@ -6,12 +6,13 @@
 public static class Optimizers
 {
     /// <summary>
-    /// Constructs an optimizer that moves each parameter against its gradient, scaled by the learning rate.
+    /// An optimizer that moves each parameter against its gradient, scaled by the learning rate.
     /// </summary>
-    /// <returns>
-    /// Returns a new optimizer performing plain gradient descent.
-    /// </returns>
-    public static IOptimizer GradientDescent() => new GradientDescentOptimizer();
+    /// <remarks>
+    /// One instance serves every caller:  plain gradient descent holds no hyperparameters and keeps no state,
+    /// as the activation functions and weight initializers here do.
+    /// </remarks>
+    public static IOptimizer GradientDescent { get; } = new GradientDescentOptimizer();
 
     /// <summary>
     /// Constructs an optimizer that accumulates a velocity for each parameter.
@@ -43,8 +44,6 @@ public static class Optimizers
     public static IOptimizer Adam(
         float firstMomentDecay = 0.9f,
         float secondMomentDecay = 0.999f,
-        float epsilon = 1e-8f)
-    {
-        return new AdamOptimizer(firstMomentDecay, secondMomentDecay, epsilon);
-    }
+        float epsilon = 1e-8f) =>
+        new AdamOptimizer(firstMomentDecay, secondMomentDecay, epsilon);
 }

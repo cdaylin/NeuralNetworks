@@ -17,12 +17,16 @@ namespace Daylin.NeuralNetworks.Backpropagation.Optimization;
 /// </para><para>
 /// An optimizer is serialized with the training session that uses it, so that a session resumes against the
 /// optimizer whose state it carries rather than whichever one a caller supplies next.
+/// </para><para>
+/// The optimizers are the library's own:  an implementation from outside it trains correctly and cannot be
+/// saved, since a session writes its optimizer and that optimizer's state by the discriminators listed here and
+/// on <see cref="IOptimizerState"/>.  <see cref="Optimizers"/> is the supported surface.
 /// </para>
 /// </remarks>
 [JsonPolymorphic]
-[JsonDerivedType(typeof(GradientDescentOptimizer), typeDiscriminator: "GradientDescent")]
-[JsonDerivedType(typeof(MomentumOptimizer), typeDiscriminator: "Momentum")]
-[JsonDerivedType(typeof(AdamOptimizer), typeDiscriminator: "Adam")]
+[JsonDerivedType(typeof(GradientDescentOptimizer), typeDiscriminator: GradientDescentOptimizer.Discriminator)]
+[JsonDerivedType(typeof(MomentumOptimizer), typeDiscriminator: MomentumOptimizer.Discriminator)]
+[JsonDerivedType(typeof(AdamOptimizer), typeDiscriminator: AdamOptimizer.Discriminator)]
 public interface IOptimizer
 {
     /// <summary>
@@ -50,8 +54,15 @@ public interface IOptimizer
     /// Indicates whether this optimizer can continue from state a layer is holding.
     /// </summary>
     /// <remarks>
-    /// State that another optimizer created, or that was created for a different number of parameters, cannot
-    /// be continued from.  A layer given such state replaces it, which restarts the optimizer for that group.
+    /// State of another kind, or state created for a different number of parameters, cannot be continued from.
+    /// Asking this is how a caller finds out before applying gradients:  a group holding state this refuses is
+    /// given fresh state instead, which starts the optimizer over for that group, and
+    /// <see cref="ApplyGradients"/> refuses such state outright.
+    /// <para>
+    /// What is compared is the state's kind and the number of parameters it describes, which is everything a
+    /// state records.  Two optimizers of one kind with different hyperparameters therefore accept one another's
+    /// state, and continuing from it is a warm restart under the new hyperparameters rather than an error.
+    /// </para>
     /// </remarks>
     /// <param name="state">
     /// The state the layer holds, which is <see langword="null"/> when it holds none.
@@ -67,22 +78,31 @@ public interface IOptimizer
     /// <summary>
     /// Moves a group of parameters against the gradients calculated for them, advancing the optimizer's state.
     /// </summary>
+    /// <remarks>
+    /// Three calls, in this order:  <see cref="CanApplyTo"/> to ask whether the state a group already holds can
+    /// be continued from, <see cref="CreateState"/> for fresh state where it cannot, and this to take the step.
+    /// The state passed here is state of this optimizer's kind, sized for this group, and is
+    /// <see langword="null"/> only for an optimizer that keeps none;  anything else is refused.
+    /// </remarks>
     /// <param name="state">
-    /// State the optimizer created for this group of parameters, or <see langword="null"/> where it keeps
-    /// none.
+    /// State of this optimizer's kind, sized for this group of parameters, or <see langword="null"/> where it
+    /// keeps none.
     /// </param>
     /// <param name="parameters">
-    /// The parameters to move.
+    /// The parameters to move, in place.
     /// </param>
     /// <param name="gradients">
-    /// The gradient of the cost with respect to each parameter.
+    /// The gradient of the cost with respect to each parameter, one for each parameter.
     /// </param>
     /// <param name="learningRate">
     /// The learning rate for the training epoch in progress.
     /// </param>
+    /// <exception cref="ArgumentException">
+    /// The state is not state this optimizer created for a group of this size.
+    /// </exception>
     void ApplyGradients(
         IOptimizerState? state,
         float[] parameters,
-        IReadOnlyList<float> gradients,
+        ReadOnlySpan<float> gradients,
         float learningRate);
 }

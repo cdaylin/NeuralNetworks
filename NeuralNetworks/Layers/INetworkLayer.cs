@@ -114,7 +114,7 @@ public interface INetworkLayer
     /// Input values.  The length must equal <see cref="InputCount"/>.
     /// </param>
     /// <param name="backpropagateGradientsAsync">
-    /// A delegate for backpropagating gradients to the preceeding layer in the network.
+    /// A delegate for backpropagating gradients to the preceding layer in the network.
     /// </param>
     /// <param name="cancellationToken">
     /// A cancellation token.

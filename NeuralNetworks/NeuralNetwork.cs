@@ -1,4 +1,5 @@
 ﻿using Daylin.NeuralNetworks.Backpropagation;
+using Daylin.NeuralNetworks.Backpropagation.Cost;
 using Daylin.NeuralNetworks.Backpropagation.Optimization;
 using Daylin.NeuralNetworks.Layers;
 using Daylin.NeuralNetworks.Layers.CompositeLayers;
@@ -10,6 +11,49 @@ namespace Daylin.NeuralNetworks;
 
 internal class NeuralNetwork : INeuralNetwork
 {
+    #region Private Static
+
+    /// <summary>
+    /// Calculates the factor that scales the network's mean gradients down to a maximum norm.
+    /// </summary>
+    /// <param name="norm">
+    /// The norm of the network's mean gradients:  the square root of the sum of their squares.
+    /// </param>
+    /// <param name="maxGradientNorm">
+    /// The largest the norm may be, or <see langword="null"/> for no limit.
+    /// </param>
+    /// <returns>
+    /// Returns the maximum over the norm where the norm exceeds the maximum, and one otherwise.  The factor is a
+    /// <see langword="double"/>, since a large norm against a small maximum gives one too small for a
+    /// <see langword="float"/> to hold.
+    /// </returns>
+    /// <exception cref="InvalidOperationException">
+    /// The norm is not a finite number, which no factor can scale to the maximum.
+    /// </exception>
+    private static double CalculateGradientScale(double norm, float? maxGradientNorm)
+    {
+        if (maxGradientNorm is not float maximum)
+            return 1;
+
+        // A gradient that has overflowed to infinity, or a sample that carried a value that is not a number,
+        //  reaches here as a norm no factor can bring within the maximum.  Without this refusal a norm that is
+        //  not a number compares false against the maximum however the comparison is written, so the limit would
+        //  silently not apply;  and an infinite norm gives a factor of zero, which multiplied into the infinite
+        //  gradient itself yields a value that is not a number rather than no movement.  Refusing says which of
+        //  the two it was.
+        if (!double.IsFinite(norm))
+        {
+            throw new InvalidOperationException(
+                $"The norm of the network's gradients is {norm}, so the maximum of {maximum} cannot be applied "
+                + "to them.  A gradient that is not a finite number comes from a sample, a target value, or a "
+                + "learning rate that drove the network's parameters past what a float can hold.");
+        }
+
+        return norm > maximum ? maximum / norm : 1;
+    }
+
+    #endregion
+
     #region Construction
 
     [JsonConstructor]
@@ -49,20 +93,11 @@ internal class NeuralNetwork : INeuralNetwork
     #region Internal
 
     /// <summary>
-    /// Number of groups the network's parameters are kept in, which is the shape of its training state.
-    /// </summary>
-    /// <remarks>
-    /// A <see cref="TrainingSession"/> compares this against the state it holds, so that state built for one
-    /// network is not imported into a differently shaped one.
-    /// </remarks>
-    [JsonIgnore]
-    internal int ParameterGroupCount => ParameterGroups.Count();
-
-    /// <summary>
     /// Accumulates the gradients one training sample calls for, without moving any parameter.
     /// </summary>
-    /// <param name="costDerivative">
-    /// The function calculating the derivative of the cost with respect to each output value.
+    /// <param name="costFunction">
+    /// The cost being minimized, which the sample's cost is measured with and whose derivative the gradients
+    /// are calculated from.
     /// </param>
     /// <param name="input">
     /// Input values.
@@ -74,10 +109,11 @@ internal class NeuralNetwork : INeuralNetwork
     /// A cancellation token.
     /// </param>
     /// <returns>
-    /// Returns a task representing this <c>async</c> operation.
+    /// Returns the cost of the sample:  the mean over the network's output values of what the cost function
+    /// made of each, measured against the parameters as they were before the sample was learned from.
     /// </returns>
-    internal async Task LearnFromSampleAsync(
-        ICostDerivative costDerivative,
+    internal async Task<float> LearnFromSampleAsync(
+        ICostFunction costFunction,
         IReadOnlyList<float> input,
         IReadOnlyList<float> targetOutput,
         CancellationToken cancellationToken)
@@ -93,24 +129,35 @@ internal class NeuralNetwork : INeuralNetwork
 
         cancellationToken.ThrowIfCancellationRequested();
 
+        IReadOnlyList<float> actualOutput = [.. output];
+
+        float cost = CalculateCost(costFunction, targetOutput, actualOutput);
+
         IEnumerable<float> gradients = CalculateOutputGradients(
-            costDerivative: costDerivative,
+            costFunction: costFunction,
             targetOutput: targetOutput,
-            actualOutput: output);
+            actualOutput: actualOutput);
 
         cancellationToken.ThrowIfCancellationRequested();
 
         await backpropagateGradientsAsync(gradients: gradients, cancellationToken: cancellationToken);
+
+        return cost;
     }
 
     /// <summary>
     /// Moves every parameter of the network by the gradients accumulated for it, and discards them.
     /// </summary>
     /// <remarks>
-    /// Parameters are moved group by group, in the order the network's layers hold them, after the norm of
-    /// the whole network's gradients has been taken.  A limit on that norm is what makes the network rather
-    /// than any one layer the place parameters move:  no group can move until every group's gradients are
-    /// known.
+    /// Three passes over the groups:  each takes the mean of its gradients and contributes to the norm of the
+    /// whole network's, then each is given the optimizer state its step needs, then each moves.  A limit on the
+    /// norm is what makes the network rather than any one layer the place parameters move, since no group can
+    /// move until every group's gradients are known;  settling the state in a pass of its own is what keeps a
+    /// failure to allocate it from stopping halfway through a network that has already begun to move.
+    /// <para>
+    /// Only the third pass moves anything, which is what lets a caller tell a batch that was refused from one
+    /// that was abandoned partway.
+    /// </para>
     /// </remarks>
     /// <param name="optimizer">
     /// The optimizer moving the parameters.
@@ -127,12 +174,38 @@ internal class NeuralNetwork : INeuralNetwork
     /// </param>
     internal void ApplyGradients(IOptimizer optimizer, float learningRate, int sampleCount, float? maxGradientNorm)
     {
-        IReadOnlyList<ParameterGroup> parameterGroups = [.. ParameterGroups];
+        optimizer.ThrowIfNull();
+        sampleCount.ThrowIfNotPositive();
 
-        float gradientScale = CalculateGradientScale(parameterGroups, sampleCount, maxGradientNorm);
+        bool measureNorm = maxGradientNorm is not null;
 
-        foreach (ParameterGroup parameterGroup in parameterGroups)
-            parameterGroup.ApplyGradients(optimizer, learningRate, sampleCount, gradientScale);
+        double squaredNorm = 0;
+
+        foreach (ParameterGroup parameterGroup in ParameterGroups)
+            squaredNorm += parameterGroup.TakeMeanGradients(sampleCount, measureNorm);
+
+        double gradientScale = CalculateGradientScale(Math.Sqrt(squaredNorm), maxGradientNorm);
+
+        // Every group is given the state it needs before any parameter moves, since creating state allocates and
+        //  a failure once the moving has started would leave some groups stepped and others not.
+        foreach (ParameterGroup parameterGroup in ParameterGroups)
+            parameterGroup.PrepareOptimizerState(optimizer);
+
+        foreach (ParameterGroup parameterGroup in ParameterGroups)
+            parameterGroup.ApplyGradients(optimizer, learningRate, gradientScale);
+    }
+
+    /// <summary>
+    /// Discards the optimizer state the network's layers are holding, leaving the parameters alone.
+    /// </summary>
+    /// <remarks>
+    /// This is what lets a session adopt a network another session trained and begin with an optimizer that has
+    /// taken no steps.
+    /// </remarks>
+    internal void DiscardOptimizerState()
+    {
+        foreach (ParameterGroup parameterGroup in ParameterGroups)
+            parameterGroup.OptimizerState = null;
     }
 
     /// <summary>
@@ -166,65 +239,24 @@ internal class NeuralNetwork : INeuralNetwork
     internal void ImportOptimizerState(IReadOnlyList<IOptimizerState?> optimizerState)
     {
         optimizerState.ThrowIfNull();
-        optimizerState.Count.ThrowIfNotEqualTo(ParameterGroupCount);
+        optimizerState.Count.ThrowIfNotEqualTo(ParameterGroups.Count);
 
-        int groupIndex = 0;
-
-        foreach (ParameterGroup parameterGroup in ParameterGroups)
-            parameterGroup.OptimizerState = optimizerState[groupIndex++];
-    }
-
-    #endregion
-
-    #region Private Static
-
-    /// <summary>
-    /// Calculates the factor that scales the network's mean gradients down to a maximum norm.
-    /// </summary>
-    /// <param name="parameterGroups">
-    /// Every parameter group of the network.
-    /// </param>
-    /// <param name="sampleCount">
-    /// Number of samples the gradients were accumulated from.
-    /// </param>
-    /// <param name="maxGradientNorm">
-    /// The largest the norm may be, or <see langword="null"/> for no limit.
-    /// </param>
-    /// <returns>
-    /// Returns the maximum over the norm where the norm exceeds the maximum, and one otherwise.
-    /// </returns>
-    private static float CalculateGradientScale(
-        IReadOnlyList<ParameterGroup> parameterGroups,
-        int sampleCount,
-        float? maxGradientNorm)
-    {
-        if (maxGradientNorm is not float maximum)
-            return 1;
-
-        // Summed in the order the groups are held, which is fixed, so the norm is the same on every run.
-        double norm = Math.Sqrt(parameterGroups.Sum(group => group.CalculateSquaredGradientNorm(sampleCount)));
-
-        return norm > maximum ? (float)(maximum / norm) : 1;
+        for (int groupIndex = 0; groupIndex < ParameterGroups.Count; groupIndex++)
+            ParameterGroups[groupIndex].OptimizerState = optimizerState[groupIndex];
     }
 
     /// <summary>
-    /// Walks a layer tree, in a fixed order, for the parameter groups its neural layers hold.
+    /// Number of parameters in each of the network's groups, in the order the groups are held.
     /// </summary>
-    /// <param name="layer">
-    /// The layer to walk.
-    /// </param>
+    /// <remarks>
+    /// A <see cref="TrainingSession"/> compares optimizer state against this before importing it, so that
+    /// state built for one shape of network is refused rather than silently replaced at the first step.
+    /// </remarks>
     /// <returns>
-    /// Returns every parameter group the layer holds, directly or through the layers it contains.
+    /// Returns one count for each parameter group.
     /// </returns>
-    private static IEnumerable<ParameterGroup> FindParameterGroups(INetworkLayer layer)
-    {
-        return layer switch
-        {
-            NeuralLayer neuralLayer => neuralLayer.ParameterGroups,
-            CompositeNetworkLayer compositeLayer => compositeLayer.Layers.SelectMany(FindParameterGroups),
-            _ => [],
-        };
-    }
+    internal IReadOnlyList<int> GetParameterCounts() =>
+        [.. ParameterGroups.Select(parameterGroup => parameterGroup.Parameters.Length)];
 
     #endregion
 
@@ -233,20 +265,62 @@ internal class NeuralNetwork : INeuralNetwork
     [JsonInclude]
     private INetworkLayer NetworkLayer { get; }
 
+    /// <summary>
+    /// Every parameter group the network's layers hold, in the order they hold them.
+    /// </summary>
+    /// <remarks>
+    /// Found once and kept:  a layer tree does not change after it is built, and each layer holds its own
+    /// groups for its lifetime, so the list and the order are stable.  Optimizer state is exported and imported
+    /// under that order.  A layer that holds no parameters, and one that is not the library's own, contribute
+    /// none.
+    /// </remarks>
     [JsonIgnore]
-    private IEnumerable<ParameterGroup> ParameterGroups => FindParameterGroups(NetworkLayer);
+    private IReadOnlyList<ParameterGroup> ParameterGroups =>
+        field ??= NetworkLayer is IParameterizedLayer parameterizedLayer ? parameterizedLayer.ParameterGroups : [];
 
     /// <summary>
     /// Calculates the partial derivative of the cost function with respect to each network output value.
     /// </summary>
-    private IEnumerable<float> CalculateOutputGradients(
-        ICostDerivative costDerivative,
+    private static IEnumerable<float> CalculateOutputGradients(
+        ICostFunction costFunction,
         IEnumerable<float> targetOutput,
         IEnumerable<float> actualOutput)
     {
         return targetOutput
             .Zip(actualOutput)
-            .Select(pair => costDerivative.Calculate(pair.First, pair.Second));
+            .Select(pair => costFunction.CalculateDerivative(pair.First, pair.Second));
+    }
+
+    /// <summary>
+    /// Calculates what the cost function makes of a sample's output, as a single number.
+    /// </summary>
+    /// <remarks>
+    /// The mean over the output values rather than their sum, so that the figure a caller watches means the same
+    /// thing whatever the network's output count is.
+    /// </remarks>
+    /// <param name="costFunction">
+    /// The cost being minimized.
+    /// </param>
+    /// <param name="targetOutput">
+    /// Desired output values.
+    /// </param>
+    /// <param name="actualOutput">
+    /// The output values the network calculated.
+    /// </param>
+    /// <returns>
+    /// Returns the sample's cost.
+    /// </returns>
+    private static float CalculateCost(
+        ICostFunction costFunction,
+        IReadOnlyList<float> targetOutput,
+        IReadOnlyList<float> actualOutput)
+    {
+        double sum = 0;
+
+        for (int index = 0; index < targetOutput.Count; index++)
+            sum += costFunction.Calculate(targetOutput[index], actualOutput[index]);
+
+        return (float)(sum / targetOutput.Count);
     }
 
     #endregion

@@ -1,5 +1,6 @@
 ﻿using Daylin.NeuralNetworks.Activation;
 using Daylin.NeuralNetworks.Backpropagation;
+using Daylin.NeuralNetworks.Backpropagation.Cost;
 using Daylin.NeuralNetworks.Backpropagation.LearningRate;
 using Daylin.NeuralNetworks.Backpropagation.Optimization;
 using Daylin.NeuralNetworks.LayerTemplates;
@@ -76,8 +77,8 @@ public class NetworkSerializationTests
         INeuralNetwork network = BuildNetworkOfEveryLayerType();
 
         TrainingSettings settings = new(
-            CostDerivatives.MeanSquaredError,
-            Optimizers.GradientDescent(),
+            CostFunctions.MeanSquaredError,
+            Optimizers.GradientDescent,
             LearningRateSchedulers.ConstantLearningRateScheduler(0.5f));
 
         await TrainingSession.Adopt(network, settings).TrainSampleAsync([.. Input], [1f]);
@@ -101,7 +102,7 @@ public class NetworkSerializationTests
         TrainingSession session = TrainingSession.Start(
             BuildNetworkOfEveryLayerType(),
             new TrainingSettings(
-                CostDerivatives.MeanSquaredError,
+                CostFunctions.MeanSquaredError,
                 Optimizers.Adam(),
                 LearningRateSchedulers.ConstantLearningRateScheduler(0.1f)));
 
@@ -120,7 +121,7 @@ public class NetworkSerializationTests
         TrainingSession session = TrainingSession.Start(
             BuildNetworkOfEveryLayerType(),
             new TrainingSettings(
-                CostDerivatives.MeanSquaredError,
+                CostFunctions.MeanSquaredError,
                 Optimizers.Adam(),
                 LearningRateSchedulers.ConstantLearningRateScheduler(0.1f)));
 
@@ -147,8 +148,8 @@ public class NetworkSerializationTests
         TrainingSession session = TrainingSession.Start(
             BuildNetworkOfEveryLayerType(),
             new TrainingSettings(
-                CostDerivatives.MeanSquaredError,
-                Optimizers.GradientDescent(),
+                CostFunctions.MeanSquaredError,
+                Optimizers.GradientDescent,
                 LearningRateSchedulers.ExponentialDecayLearningRateScheduler(0.5f, decayRate: 0.5f)));
 
         await session.TrainEpochAsync([[.. Input], [.. Input]], [[1f], [-1f]], batchSize: 2);
@@ -177,7 +178,7 @@ public class NetworkSerializationTests
         TrainingSession session = TrainingSession.Start(
             BuildNetworkOfEveryLayerType(),
             new TrainingSettings(
-                CostDerivatives.MeanSquaredError,
+                CostFunctions.MeanSquaredError,
                 Optimizers.Momentum(),
                 LearningRateSchedulers.ConstantLearningRateScheduler(0.1f)));
 

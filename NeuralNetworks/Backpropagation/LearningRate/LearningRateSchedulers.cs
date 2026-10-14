@@ -12,7 +12,7 @@ public static class LearningRateSchedulers
     /// A positive value representing the learning rate.
     /// </param>
     /// <returns>
-    /// A new learning rate scheduler that uses a constant learning rate for all training epochs.
+    /// Returns a new learning rate scheduler that uses a constant learning rate for all training epochs.
     /// </returns>
     public static ILearningRateScheduler ConstantLearningRateScheduler(float learningRate) =>
         new ConstantLearningRateScheduler(learningRate);
@@ -27,12 +27,10 @@ public static class LearningRateSchedulers
     /// The fraction of an epoch's learning rate that the next epoch keeps, in the range (0, 1].
     /// </param>
     /// <returns>
-    /// A new learning rate scheduler that decays the learning rate exponentially over training epochs.
+    /// Returns a new learning rate scheduler that decays the learning rate exponentially over training epochs.
     /// </returns>
     public static ILearningRateScheduler ExponentialDecayLearningRateScheduler(
         float initialLearningRate,
-        float decayRate)
-    {
-        return new ExponentialDecayLearningRateScheduler(initialLearningRate, decayRate);
-    }
+        float decayRate) =>
+        new ExponentialDecayLearningRateScheduler(initialLearningRate, decayRate);
 }

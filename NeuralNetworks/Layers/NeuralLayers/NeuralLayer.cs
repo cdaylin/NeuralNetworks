@@ -2,6 +2,7 @@
 using Daylin.NeuralNetworks.WeightInitialization;
 using Daylin.Utilities.Threading;
 
+using System.Runtime.ExceptionServices;
 using System.Text.Json.Serialization;
 
 namespace Daylin.NeuralNetworks.Layers.NeuralLayers;
@@ -9,7 +10,7 @@ namespace Daylin.NeuralNetworks.Layers.NeuralLayers;
 /// <summary>
 /// A layer of neurons in an artificial neural network.
 /// </summary>
-internal abstract class NeuralLayer : INetworkLayer
+internal abstract class NeuralLayer : INetworkLayer, IParameterizedLayer
 {
     #region Construction
 
@@ -109,6 +110,24 @@ internal abstract class NeuralLayer : INetworkLayer
 
     #endregion
 
+    #region Explicit Interface Implementations
+
+    /// <inheritdoc cref="IParameterizedLayer.ParameterGroups"/>
+    /// <remarks>
+    /// The biases first, then the connection weights:  that order is the layer's contract with a training
+    /// session, which exports and imports optimizer state under it, so it is composed here rather than left to
+    /// each layer.  The groups hold the layer's own arrays by reference, so moving a group's parameters moves
+    /// the layer's weights or biases.
+    /// <para>
+    /// Implemented explicitly, so that the serializer does not see it:  an implicit implementation would be
+    /// public, and a saved network carries no training state.
+    /// </para>
+    /// </remarks>
+    IReadOnlyList<ParameterGroup> IParameterizedLayer.ParameterGroups =>
+        field ??= [BiasGroup, .. WeightGroups];
+
+    #endregion
+
     #region Protected
 
     [JsonInclude]
@@ -118,37 +137,57 @@ internal abstract class NeuralLayer : INetworkLayer
     protected IConnectionWeightInitializer WeightInitializer { get; }
 
     /// <summary>
-    /// The layer's parameters, grouped as the optimizer keeps state for them.
+    /// The group holding the layer's biases.
     /// </summary>
     /// <remarks>
-    /// The groups hold the layer's own arrays by reference, so moving a group's parameters moves the layer's
-    /// weights or biases.
+    /// Created once, when the groups are first needed.
     /// </remarks>
-    internal IReadOnlyList<ParameterGroup> ParameterGroups => field ??= CreateParameterGroups();
+    protected ParameterGroup BiasGroup => field ??= CreateBiasGroup();
 
     /// <summary>
-    /// Creates the groups the layer's parameters are kept in.
+    /// The groups holding the layer's connection weights, one for each output value whose weights are its own,
+    /// or a single group where every output value shares one set.
     /// </summary>
     /// <remarks>
-    /// Called once, when the groups are first needed.  An implementation returns groups holding its parameter
-    /// arrays by reference, in an order it keeps for the life of the layer:  the optimizer's state is stored
-    /// against that order and restored into it.
+    /// Created once, when the groups are first needed.
+    /// </remarks>
+    protected IReadOnlyList<ParameterGroup> WeightGroups => field ??= CreateWeightGroups();
+
+    /// <summary>
+    /// Creates the group holding the layer's biases.
+    /// </summary>
+    /// <remarks>
+    /// Called once, when the groups are first needed.  An implementation returns a group holding its parameter
+    /// array by reference, so that moving the group's parameters moves the layer's own.
     /// </remarks>
     /// <returns>
-    /// Returns the layer's parameter groups.
+    /// Returns the group holding the layer's biases.
     /// </returns>
-    protected abstract IReadOnlyList<ParameterGroup> CreateParameterGroups();
+    protected abstract ParameterGroup CreateBiasGroup();
 
     /// <summary>
-    /// Returns the gradients accumulated for a group of parameters.
+    /// Creates the groups the layer's connection weights are kept in.
     /// </summary>
-    /// <param name="groupIndex">
-    /// Index of the group, in the order <see cref="CreateParameterGroups"/> returned.
+    /// <remarks>
+    /// Called once, when the groups are first needed.  An implementation returns one group for each output
+    /// value whose weights are its own, or a single group where every output value shares one set of weights,
+    /// and overrides <see cref="GetWeightGroup"/> to say which group an output value's gradients belong to.
+    /// </remarks>
+    /// <returns>
+    /// Returns the groups holding the layer's connection weights, in output value order.
+    /// </returns>
+    protected abstract IReadOnlyList<ParameterGroup> CreateWeightGroups();
+
+    /// <summary>
+    /// Returns the group holding the connection weights an output value's gradients belong to.
+    /// </summary>
+    /// <param name="outputIndex">
+    /// Index of the output value.
     /// </param>
     /// <returns>
-    /// Returns the gradient accumulated for each parameter in the group.
+    /// Returns that output value's group of connection weights.
     /// </returns>
-    protected float[] GetGradients(int groupIndex) => ParameterGroups[groupIndex].Gradients;
+    protected virtual ParameterGroup GetWeightGroup(int outputIndex) => WeightGroups[outputIndex];
 
     protected abstract void InitializeBiases(float bias = 0);
 
@@ -191,9 +230,10 @@ internal abstract class NeuralLayer : INetworkLayer
     /// Output value index.
     /// </param>
     /// <param name="gradient">
-    /// The amount the bias is owed, before the learning rate.
+    /// The gradient of the cost with respect to that bias, for one sample.
     /// </param>
-    protected abstract void AccumulateBiasGradient(int outputIndex, float gradient);
+    protected virtual void AccumulateBiasGradient(int outputIndex, float gradient) =>
+        BiasGroup.AccumulateGradient(outputIndex, gradient);
 
     /// <summary>
     /// Enumerates weights for connections between input values and an output value.
@@ -227,8 +267,8 @@ internal abstract class NeuralLayer : INetworkLayer
     protected abstract float GetWeight(int inputIndex, int outputIndex);
 
     /// <summary>
-    /// Accumulates the gradients of the cost with respect to the weights of the connections between input
-    /// value.
+    /// Accumulates the gradients of the cost with respect to the weights of the connections between the input
+    /// values and an output value.
     /// </summary>
     /// <remarks>
     /// Where a layer shares one set of weights among several output values, every output value's gradients
@@ -238,10 +278,11 @@ internal abstract class NeuralLayer : INetworkLayer
     /// Output value index.
     /// </param>
     /// <param name="gradients">
-    /// The amount each connection weight is owed before the learning rate, with one value for each input value
-    /// that is connected to the output value.
+    /// The gradient of the cost with respect to each of those connection weights, for one sample, with one
+    /// value for each input value that is connected to the output value.
     /// </param>
-    protected abstract void AccumulateWeightGradients(int outputIndex, IEnumerable<float> gradients);
+    protected virtual void AccumulateWeightGradients(int outputIndex, IEnumerable<float> gradients) =>
+        GetWeightGroup(outputIndex).AccumulateGradients(gradients);
 
     protected virtual float CalculateOutput(IEnumerable<float> input, int outputIndex)
     {
@@ -284,10 +325,35 @@ internal abstract class NeuralLayer : INetworkLayer
                 () => backpropagateGradientsAsync(inputGradients, cancellationToken));
         }
 
-        AccumulateGradients(input, output, outputGradients);
+        // The preceding layers must have finished writing their gradients before this returns, however this
+        //  layer's accumulation ends:  a batch abandoned partway through discards the gradients accumulated so
+        //  far, and a task still running would write into the layers it had just cleared.  The two run
+        //  concurrently, so where both fail nothing here establishes an order between them;  this layer's own
+        //  failure is reported because it is the one describing the work this call was asked to do.
+        ExceptionDispatchInfo? accumulationFailure = null;
+
+        try
+        {
+            AccumulateGradients(input, outputGradients);
+        }
+        catch (Exception exception)
+        {
+            accumulationFailure = ExceptionDispatchInfo.Capture(exception);
+        }
 
         if (backpropagationTask is not null)
-            await backpropagationTask;
+        {
+            try
+            {
+                await backpropagationTask;
+            }
+            catch when (accumulationFailure is not null)
+            {
+                // Dropped in favour of this layer's own failure, thrown below.
+            }
+        }
+
+        accumulationFailure?.Throw();
     }
 
     protected virtual IEnumerable<float> CalculateInputGradients(IReadOnlyList<float> outputGradients)
@@ -314,15 +380,11 @@ internal abstract class NeuralLayer : INetworkLayer
     /// <param name="input">
     /// The input values the layer calculated its output from.
     /// </param>
-    /// <param name="output">
-    /// The output values the layer calculated.
-    /// </param>
     /// <param name="outputGradients">
     /// The gradient of the cost with respect to each output value, multiplied by its activation derivative.
     /// </param>
     protected virtual void AccumulateGradients(
         IEnumerable<float> input,
-        IReadOnlyList<float> output,
         IReadOnlyList<float> outputGradients)
     {
         outputGradients.Count.ThrowIfNotEqualTo(OutputCount);

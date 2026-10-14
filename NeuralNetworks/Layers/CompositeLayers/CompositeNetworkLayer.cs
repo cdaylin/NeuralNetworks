@@ -1,9 +1,11 @@
-﻿namespace Daylin.NeuralNetworks.Layers.CompositeLayers;
+﻿using Daylin.NeuralNetworks.Layers.NeuralLayers;
+
+namespace Daylin.NeuralNetworks.Layers.CompositeLayers;
 
 /// <summary>
 /// A composite network component comprising two or more nested components.
 /// </summary>
-internal abstract class CompositeNetworkLayer : INetworkLayer
+internal abstract class CompositeNetworkLayer : INetworkLayer, IParameterizedLayer
 {
     protected CompositeNetworkLayer(IEnumerable<INetworkLayer> layers)
     {
@@ -17,6 +19,15 @@ internal abstract class CompositeNetworkLayer : INetworkLayer
     public abstract string ShortDescription { get; }
 
     public IEnumerable<INetworkLayer> Layers { get; }
+
+    /// <inheritdoc cref="IParameterizedLayer.ParameterGroups"/>
+    /// <remarks>
+    /// The nested layers' groups, in the order the layers are held, so that a composite presents its
+    /// parameters exactly as the layers inside it hold them.  Implemented explicitly, so that the serializer
+    /// does not see it:  a saved network carries no training state.
+    /// </remarks>
+    IReadOnlyList<ParameterGroup> IParameterizedLayer.ParameterGroups =>
+        field ??= [.. Layers.OfType<IParameterizedLayer>().SelectMany(layer => layer.ParameterGroups)];
 
     public abstract int InputCount { get; }
 

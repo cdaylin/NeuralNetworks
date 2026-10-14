@@ -9,13 +9,25 @@ internal sealed class MomentumOptimizerState : IOptimizerState
 {
     #region Construction
 
+    /// <summary>
+    /// Constructs the state for a group of parameters, with every velocity at zero.
+    /// </summary>
+    /// <param name="parameterCount">
+    /// Number of parameters in the group, which may be zero.
+    /// </param>
     public MomentumOptimizerState(int parameterCount)
     {
-        parameterCount.ThrowIfNotPositive();
+        parameterCount.ThrowIfNegative();
 
         Velocities = new float[parameterCount];
     }
 
+    /// <summary>
+    /// Constructs the state a saved session carried.
+    /// </summary>
+    /// <param name="velocities">
+    /// The velocity carried for each parameter.
+    /// </param>
     [JsonConstructor]
     public MomentumOptimizerState(float[] velocities)
     {
@@ -28,6 +40,7 @@ internal sealed class MomentumOptimizerState : IOptimizerState
 
     #region Public
 
+    /// <inheritdoc cref="IOptimizerState.ParameterCount"/>
     [JsonIgnore]
     public int ParameterCount => Velocities.Length;
 

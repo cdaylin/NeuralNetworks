@@ -1,6 +1,7 @@
 ﻿using Daylin.NeuralNetworks.Backpropagation.Optimization;
 
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 
 namespace Daylin.NeuralNetworks.Backpropagation;
@@ -23,6 +24,12 @@ namespace Daylin.NeuralNetworks.Backpropagation;
 /// The settings are the session's own, recorded when it started and restored when it resumes, so a session
 /// cannot be continued against a cost function, an optimizer, or a schedule other than the one whose state it
 /// carries.
+/// </para><para>
+/// A session trains one call at a time.  Every training method accumulates gradients into arrays the whole
+/// network shares, so two calls overlapping on one session average one another's samples together, move the
+/// parameters twice, and leave the optimizer describing weights it did not move -- the same damage as two
+/// sessions over one network, and equally quiet.  Awaiting each call before making the next is what a caller
+/// owes;  nothing enforces it.
 /// </para>
 /// </remarks>
 public sealed class TrainingSession
@@ -55,7 +62,11 @@ public sealed class TrainingSession
         network.ThrowIfNull();
         settings.ThrowIfNull();
 
-        return new TrainingSession(Copy(network), settings, completedEpochCount: 0, optimizerState: null);
+        return new TrainingSession(
+            Copy(AsTrainedNetwork(network)),
+            settings,
+            completedEpochCount: 0,
+            optimizerState: null);
     }
 
     /// <summary>
@@ -72,12 +83,17 @@ public sealed class TrainingSession
     /// grows worse in a way no exception reports.  Where a caller cannot make that promise,
     /// <see cref="Start"/> is the one that does not need it.
     /// </para><para>
+    /// Adopting a network <em>writes</em> to it before any training:  a network an earlier session trained is
+    /// still holding that session's optimizer state, and this one discards it, since its own optimizer has taken
+    /// no steps.  So adopting a network another session is training does not merely risk interleaved steps -- it
+    /// takes that session's state away at once.
+    /// </para><para>
     /// A session saved and resumed is never adopted:  <see cref="Resume"/> builds its network from the
     /// document, so it owns that network outright.
     /// </para>
     /// </remarks>
     /// <param name="network">
-    /// The network to train, which the session trains in place.
+    /// The network to train, which the session trains in place, and whose optimizer state it discards.
     /// </param>
     /// <param name="settings">
     /// Settings governing the training, which the session keeps for as long as it lasts.
@@ -96,23 +112,124 @@ public sealed class TrainingSession
     /// <summary>
     /// Resumes a session from the JSON it was saved to.
     /// </summary>
+    /// <remarks>
+    /// A session saved before the cost function replaced the cost derivative is refused:  its settings name a
+    /// <c>CostDerivative</c>, which this library no longer reads.  The weights are not lost --
+    /// <see cref="ReadNetwork"/> takes the network out of such a document, and a session can be started from it.
+    /// </remarks>
     /// <param name="json">
     /// JSON holding a saved session.
     /// </param>
     /// <returns>
     /// Returns the session, carrying the network, settings, optimizer state and epoch count it was saved with.
     /// </returns>
+    /// <exception cref="ArgumentException">
+    /// The JSON holds no session, or holds one this library cannot read.
+    /// </exception>
     public static TrainingSession Resume(string json)
     {
         json.ThrowIfNullOrEmptyOrWhitespace();
+
+        RefuseSessionSavedBeforeTheCostFunction(json);
 
         return JsonSerializer.Deserialize<TrainingSession>(json)
             ?? throw new ArgumentException("The JSON holds no training session.", nameof(json));
     }
 
+    /// <summary>
+    /// Reads the network out of a saved session, without the training that was going on around it.
+    /// </summary>
+    /// <remarks>
+    /// What a caller is left with when a session cannot be resumed -- its settings naming a cost this library no
+    /// longer reads -- since the network's own document has not changed and the weights are the part worth
+    /// keeping.  A session started from the network returned here has an optimizer that has taken no steps.
+    /// </remarks>
+    /// <param name="json">
+    /// JSON holding a saved session.
+    /// </param>
+    /// <returns>
+    /// Returns the network the session was training.
+    /// </returns>
+    /// <exception cref="ArgumentException">
+    /// The JSON holds no session, or the session holds no network this library can read.
+    /// </exception>
+    public static INeuralNetwork ReadNetwork(string json)
+    {
+        json.ThrowIfNullOrEmptyOrWhitespace();
+
+        JsonNode node = JsonNode.Parse(json)
+            ?? throw new ArgumentException("The JSON holds no training session.", nameof(json));
+
+        JsonNode network = node[nameof(Network)]
+            ?? throw new ArgumentException(
+                $"The saved session carries no '{nameof(Network)}'.",
+                nameof(json));
+
+        return network.Deserialize<INeuralNetwork>()
+            ?? throw new ArgumentException("The saved session's network is null.", nameof(json));
+    }
+
     #endregion
 
     #region Private Static
+
+    /// <summary>
+    /// Refuses a session document written before the cost function replaced the cost derivative.
+    /// </summary>
+    /// <remarks>
+    /// Such a document names its cost <c>CostDerivative</c>, which nothing reads now, so the serializer would
+    /// leave the settings without a cost and the failure would name a constructor parameter the caller never
+    /// supplied.  Saying what the document is costs one pass over its properties, on the resume path only.
+    /// </remarks>
+    /// <param name="json">
+    /// JSON holding a saved session.
+    /// </param>
+    /// <exception cref="ArgumentException">
+    /// The document names a cost derivative rather than a cost function.
+    /// </exception>
+    private static void RefuseSessionSavedBeforeTheCostFunction(string json)
+    {
+        using JsonDocument document = JsonDocument.Parse(json);
+
+        if (!document.RootElement.TryGetProperty(nameof(Settings), out JsonElement settings)
+            || settings.ValueKind != JsonValueKind.Object
+            || !settings.TryGetProperty("CostDerivative", out JsonElement _))
+        {
+            return;
+        }
+
+        throw new ArgumentException(
+            "This session was saved before the library's cost derivative became a cost function, so its "
+            + $"settings name a 'CostDerivative' where a '{nameof(TrainingSettings.CostFunction)}' is now read.  "
+            + $"Take the network out with {nameof(ReadNetwork)} and start a session from it under new settings.",
+            nameof(json));
+    }
+
+    /// <summary>
+    /// Returns a network as the type the library builds, which is the only kind a session can train.
+    /// </summary>
+    /// <remarks>
+    /// Every way of starting a session comes through here, so a network from elsewhere is refused by one
+    /// message however it arrives.  It is asked before anything else happens to the network, since a copy
+    /// through the serializer would refuse an unregistered type first and say so in its own terms.
+    /// </remarks>
+    /// <param name="network">
+    /// The network a caller supplied.
+    /// </param>
+    /// <returns>
+    /// Returns that network, as the library's own type.
+    /// </returns>
+    /// <exception cref="ArgumentException">
+    /// The network is not one this library built.
+    /// </exception>
+    private static NeuralNetwork AsTrainedNetwork(INeuralNetwork network)
+    {
+        return network as NeuralNetwork
+            ?? throw new ArgumentException(
+                $"A training session trains a network this library built, and '{network.GetType().Name}' "
+                + "is not one.",
+                nameof(network));
+    }
 
     /// <summary>
     /// Copies a network, through the JSON it serializes to.
@@ -123,23 +240,78 @@ public sealed class TrainingSession
     /// <returns>
     /// Returns a network holding the same weights, sharing nothing with the one it was copied from.
     /// </returns>
-    private static NeuralNetwork Copy(INeuralNetwork network)
+    private static NeuralNetwork Copy(NeuralNetwork network)
     {
-        INeuralNetwork? copy = JsonSerializer.Deserialize<INeuralNetwork>(JsonSerializer.Serialize(network));
+        INeuralNetwork? copy = JsonSerializer.Deserialize<INeuralNetwork>(
+            JsonSerializer.Serialize<INeuralNetwork>(network));
 
-        return copy as NeuralNetwork
-            ?? throw new ArgumentException(
-                $"A training session trains a network this library built, and '{network.GetType().Name}' "
-                + "is not one.",
-                nameof(network));
+        return AsTrainedNetwork(
+            copy ?? throw new ArgumentException("The network serialized to nothing.", nameof(network)));
+    }
+
+    /// <summary>
+    /// Takes a batch's worth of samples from a set of them.
+    /// </summary>
+    /// <remarks>
+    /// Read by index rather than skipped over, so that an epoch costs one pass over its samples whatever kind
+    /// of list they arrived in.
+    /// </remarks>
+    /// <param name="samples">
+    /// Every sample of the epoch.
+    /// </param>
+    /// <param name="firstIndex">
+    /// Index of the batch's first sample.
+    /// </param>
+    /// <param name="count">
+    /// Number of samples in the batch.
+    /// </param>
+    /// <returns>
+    /// Returns the batch's samples, in the order they were given.
+    /// </returns>
+    private static IReadOnlyList<IReadOnlyList<float>> Slice(
+        IReadOnlyList<IReadOnlyList<float>> samples,
+        int firstIndex,
+        int count)
+    {
+        IReadOnlyList<float>[] batch = new IReadOnlyList<float>[count];
+
+        for (int index = 0; index < count; index++)
+            batch[index] = samples[firstIndex + index];
+
+        return batch;
     }
 
     #endregion
 
     #region Construction
 
+    /// <summary>
+    /// Constructs a session, which a caller does through <see cref="Start"/>, <see cref="Adopt"/> or
+    /// <see cref="Resume"/>.
+    /// </summary>
+    /// <remarks>
+    /// Not public:  those three are the ways to have a session, and each says what it does with the network it
+    /// is given.  The serializer reaches this when a saved session is resumed.
+    /// </remarks>
+    /// <param name="network">
+    /// The network the session trains, in place.
+    /// </param>
+    /// <param name="settings">
+    /// Settings governing the training.
+    /// </param>
+    /// <param name="completedEpochCount">
+    /// Number of epochs already completed.
+    /// </param>
+    /// <param name="optimizerState">
+    /// State for the optimizer to continue from, one entry for each of the network's parameter groups, or
+    /// <see langword="null"/> for an optimizer that starts afresh -- which also discards any state the network
+    /// is still carrying from an earlier session.
+    /// </param>
+    /// <exception cref="ArgumentException">
+    /// The network is not one this library built, or the optimizer state does not describe its parameters.
+    /// </exception>
     [JsonConstructor]
-    public TrainingSession(
+    private TrainingSession(
         INeuralNetwork network,
         TrainingSettings settings,
         int completedEpochCount,
@@ -149,23 +321,32 @@ public sealed class TrainingSession
         settings.ThrowIfNull();
         completedEpochCount.ThrowIfNegative();
 
-        TrainedNetwork = network as NeuralNetwork
-            ?? throw new ArgumentException(
-                $"A training session trains a network this library built, and '{network.GetType().Name}' "
-                + "is not one.",
-                nameof(network));
-
+        TrainedNetwork = AsTrainedNetwork(network);
         Settings = settings;
         CompletedEpochCount = completedEpochCount;
 
-        if (optimizerState is not null)
+        if (optimizerState is null)
+        {
+            // An adopted network may have been trained by an earlier session, whose optimizer state its layers
+            //  are still holding.  This session's optimizer has taken no steps, so it starts from none.
+            TrainedNetwork.DiscardOptimizerState();
+        }
+        else
+        {
             RestoreOptimizerState(optimizerState);
+        }
     }
 
     #endregion
 
     #region Public
 
+    /// <summary>
+    /// Describes the session:  the network it trains, its optimizer, and how far it has gone.
+    /// </summary>
+    /// <returns>
+    /// Returns the network's short description, the optimizer's short name, and the completed epoch count.
+    /// </returns>
     public override string ToString() =>
         $"{TrainedNetwork.ShortDescription} ({Settings.Optimizer.ShortName}, {CompletedEpochCount} epochs)";
 
@@ -200,13 +381,19 @@ public sealed class TrainingSession
     /// </summary>
     /// <remarks>
     /// Written so that a saved session resumes where it left off, and read back through the constructor.  A
-    /// session whose optimizer keeps no state, or which has taken no step, carries nothing.
+    /// session whose optimizer keeps no state, or which has taken no step, carries nothing.  Not public:  the
+    /// order the entries are in is the network's business, and a caller has nothing it can do with them.
     /// </remarks>
     [JsonInclude]
-    public IReadOnlyList<IOptimizerState?>? OptimizerState =>
-        TrainedNetwork.ExportOptimizerState() is { } state && state.Any(entry => entry is not null)
-            ? state
-            : null;
+    private IReadOnlyList<IOptimizerState?>? OptimizerState
+    {
+        get
+        {
+            IReadOnlyList<IOptimizerState?> state = TrainedNetwork.ExportOptimizerState();
+
+            return state.Any(entry => entry is not null) ? state : null;
+        }
+    }
 
     /// <summary>
     /// Trains the network on one sample, moving its parameters once.
@@ -232,14 +419,17 @@ public sealed class TrainingSession
     /// A cancellation token.
     /// </param>
     /// <returns>
-    /// Returns a task representing this <c>async</c> operation.
+    /// Returns the sample's cost, measured against the parameters as they were before they moved.
     /// </returns>
-    public async Task TrainSampleAsync(
+    public async Task<float> TrainSampleAsync(
         IReadOnlyList<float> input,
         IReadOnlyList<float> targetOutput,
         CancellationToken cancellationToken = default)
     {
-        await TrainBatchAsync([input], [targetOutput], cancellationToken);
+        input.ThrowIfNull();
+        targetOutput.ThrowIfNull();
+
+        return await TrainBatchAsync([input], [targetOutput], cancellationToken);
     }
 
     /// <summary>
@@ -250,7 +440,13 @@ public sealed class TrainingSession
     /// against the gradients the samples called for, averaged over the batch.  A batch is the samples it is
     /// given, so a batch of one is <see cref="TrainSampleAsync"/>.
     /// <para>
-    /// A batch is all or nothing:  cancelled partway through, it leaves the network as it found it.
+    /// A batch that is abandoned before its parameters begin to move -- cancelled, or refused for a gradient no
+    /// limit can scale -- leaves the network exactly as it found it, gradients included, and the session can be
+    /// trained again.  Once the parameters have begun to move, only an optimizer of the caller's own can fail,
+    /// since every optimizer this library provides has had its state settled before the first group moves;  such
+    /// a failure may leave some groups moved and others not, and the session cannot tell which, so what the
+    /// network holds afterwards is neither what the batch started from nor what it would have produced.  A
+    /// caller whose own optimizer can fail that way owes itself a copy of the network taken beforehand.
     /// </para>
     /// </remarks>
     /// <param name="input">
@@ -263,15 +459,19 @@ public sealed class TrainingSession
     /// A cancellation token.
     /// </param>
     /// <returns>
-    /// Returns a task representing this <c>async</c> operation.
+    /// Returns the batch's cost:  the mean over its samples, measured against the parameters as they were
+    /// before they moved, which is what a caller watches to see whether training is working.
     /// </returns>
-    public async Task TrainBatchAsync(
+    public async Task<float> TrainBatchAsync(
         IReadOnlyList<IReadOnlyList<float>> input,
         IReadOnlyList<IReadOnlyList<float>> targetOutput,
         CancellationToken cancellationToken = default)
     {
-        await TrainBatchAsync(
-            Settings.LearningRateScheduler.GetLearningRate(CompletedEpochCount),
+        input.ThrowIfNull();
+        targetOutput.ThrowIfNull();
+
+        return await TrainBatchAsync(
+            ReadLearningRate(),
             input,
             targetOutput,
             cancellationToken);
@@ -303,32 +503,43 @@ public sealed class TrainingSession
     /// A cancellation token.
     /// </param>
     /// <returns>
-    /// Returns a task representing this <c>async</c> operation.
+    /// Returns the epoch's cost:  the mean over its samples of what each cost when it was learned from, so a
+    /// caller training epoch after epoch can watch the figure fall.
     /// </returns>
-    public async Task TrainEpochAsync(
+    public async Task<float> TrainEpochAsync(
         IReadOnlyList<IReadOnlyList<float>> input,
         IReadOnlyList<IReadOnlyList<float>> targetOutput,
         int batchSize,
         CancellationToken cancellationToken = default)
     {
+        input.ThrowIfNull();
         input.ThrowIfEmpty();
+        targetOutput.ThrowIfNull();
         targetOutput.Count.ThrowIfNotEqualTo(input.Count);
         batchSize.ThrowIfNotPositive();
 
-        float learningRate = Settings.LearningRateScheduler.GetLearningRate(CompletedEpochCount);
+        float learningRate = ReadLearningRate();
+
+        double costOfEverySample = 0;
 
         for (int firstIndex = 0; firstIndex < input.Count; firstIndex += batchSize)
         {
             int sampleCount = Math.Min(batchSize, input.Count - firstIndex);
 
-            await TrainBatchAsync(
+            float batchCost = await TrainBatchAsync(
                 learningRate,
                 Slice(input, firstIndex, sampleCount),
                 Slice(targetOutput, firstIndex, sampleCount),
                 cancellationToken);
+
+            // Weighted by the batch's size, so that a final partial batch does not count for as much as a full
+            //  one:  the epoch's cost is the mean over its samples rather than over its batches.
+            costOfEverySample += (double)batchCost * sampleCount;
         }
 
         CompletedEpochCount += 1;
+
+        return (float)(costOfEverySample / input.Count);
     }
 
     /// <summary>
@@ -349,12 +560,33 @@ public sealed class TrainingSession
     /// </summary>
     private NeuralNetwork TrainedNetwork { get; }
 
-    private static IReadOnlyList<IReadOnlyList<float>> Slice(
-        IReadOnlyList<IReadOnlyList<float>> samples,
-        int firstIndex,
-        int count)
+    /// <summary>
+    /// Reads the rate for the epoch in progress from the schedule, refusing one that would train nothing.
+    /// </summary>
+    /// <remarks>
+    /// Checked here rather than only where a schedule is constructed, because a schedule is free to return a
+    /// rate it was never constructed with:  an exponential decay underflows to zero after enough epochs, and a
+    /// rate of zero would run every batch, count every epoch, advance the optimizer's state, and move no
+    /// parameter.  The refusal names the schedule and the epoch, since the rate is the schedule's answer rather
+    /// than anything the caller passed in.
+    /// </remarks>
+    /// <returns>
+    /// Returns the learning rate for the epoch in progress.
+    /// </returns>
+    /// <exception cref="InvalidOperationException">
+    /// The schedule returned a rate that is not positive.
+    /// </exception>
+    private float ReadLearningRate()
     {
-        return samples.Skip(firstIndex).Take(count).ToList();
+        float learningRate = Settings.LearningRateScheduler.GetLearningRate(CompletedEpochCount);
+
+        if (learningRate > 0)
+            return learningRate;
+
+        throw new InvalidOperationException(
+            $"{Settings.LearningRateScheduler.GetType().Name} returned a learning rate of {learningRate} for "
+            + $"epoch {CompletedEpochCount}, and a rate that is not positive would train every batch without "
+            + "moving a parameter.");
     }
 
     /// <summary>
@@ -370,11 +602,31 @@ public sealed class TrainingSession
     /// </param>
     private void RestoreOptimizerState(IReadOnlyList<IOptimizerState?> optimizerState)
     {
-        if (optimizerState.Count != TrainedNetwork.ParameterGroupCount)
+        IReadOnlyList<int> parameterCounts = TrainedNetwork.GetParameterCounts();
+
+        if (optimizerState.Count != parameterCounts.Count)
         {
             throw new ArgumentException(
                 $"The session carries optimizer state for {optimizerState.Count} parameter groups, and its "
-                + $"network has {TrainedNetwork.ParameterGroupCount}.",
+                + $"network has {parameterCounts.Count}.",
+                nameof(optimizerState));
+        }
+
+        // Checked group by group, and against this session's own optimizer:  state of the right count and the
+        //  wrong shape, or state another optimizer created, would otherwise be imported here and then quietly
+        //  replaced at the first step, which is the discard this refusal exists to prevent.
+        for (int groupIndex = 0; groupIndex < optimizerState.Count; groupIndex++)
+        {
+            IOptimizerState? state = optimizerState[groupIndex];
+
+            if (Settings.Optimizer.CanApplyTo(state, parameterCounts[groupIndex]))
+                continue;
+
+            throw new ArgumentException(
+                $"The optimizer state saved for parameter group {groupIndex} is "
+                + $"'{state?.GetType().Name ?? "null"}' for {state?.ParameterCount ?? 0} parameters, and "
+                + $"{Settings.Optimizer.ShortName} cannot continue from it for the "
+                + $"{parameterCounts[groupIndex]} parameters that group holds.",
                 nameof(optimizerState));
         }
 
@@ -397,9 +649,9 @@ public sealed class TrainingSession
     /// A cancellation token.
     /// </param>
     /// <returns>
-    /// Returns a task representing this <c>async</c> operation.
+    /// Returns the mean cost of the batch's samples, measured as each was learned from.
     /// </returns>
-    private async Task TrainBatchAsync(
+    private async Task<float> TrainBatchAsync(
         float learningRate,
         IReadOnlyList<IReadOnlyList<float>> input,
         IReadOnlyList<IReadOnlyList<float>> targetOutput,
@@ -408,12 +660,14 @@ public sealed class TrainingSession
         input.ThrowIfEmpty();
         targetOutput.Count.ThrowIfNotEqualTo(input.Count);
 
+        double costOfEverySample = 0;
+
         try
         {
             for (int sampleIndex = 0; sampleIndex < input.Count; sampleIndex++)
             {
-                await TrainedNetwork.LearnFromSampleAsync(
-                    Settings.CostDerivative,
+                costOfEverySample += await TrainedNetwork.LearnFromSampleAsync(
+                    Settings.CostFunction,
                     input[sampleIndex],
                     targetOutput[sampleIndex],
                     cancellationToken);
@@ -428,7 +682,21 @@ public sealed class TrainingSession
             throw;
         }
 
-        TrainedNetwork.ApplyGradients(Settings.Optimizer, learningRate, input.Count, Settings.MaxGradientNorm);
+        try
+        {
+            TrainedNetwork.ApplyGradients(Settings.Optimizer, learningRate, input.Count, Settings.MaxGradientNorm);
+        }
+        catch
+        {
+            // Separate from the accumulation above because the two failures leave different things behind:
+            //  nothing has moved there, and here the parameters move group by group, so a failure inside the
+            //  step may leave some groups moved and others not.  The gradients go either way.
+            TrainedNetwork.DiscardGradients();
+
+            throw;
+        }
+
+        return (float)(costOfEverySample / input.Count);
     }
 
     #endregion

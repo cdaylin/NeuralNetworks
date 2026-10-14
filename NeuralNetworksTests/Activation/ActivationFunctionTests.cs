@@ -1,4 +1,4 @@
-using Daylin.Utilities.Exceptions;
+﻿using Daylin.Utilities.Exceptions;
 
 namespace Daylin.NeuralNetworks.Activation;
 

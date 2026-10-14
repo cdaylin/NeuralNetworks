@@ -1,4 +1,5 @@
-using Daylin.NeuralNetworks.Activation;
+﻿using Daylin.NeuralNetworks.Activation;
+using Daylin.NeuralNetworks.Backpropagation.Cost;
 using Daylin.NeuralNetworks.Backpropagation.LearningRate;
 using Daylin.NeuralNetworks.Backpropagation.Optimization;
 using Daylin.NeuralNetworks.Serialization;
@@ -25,9 +26,62 @@ public class GradientClippingTests
 
     private static float LearningRate => 0.1f;
 
+    /// <summary>
+    /// A limit the one-neuron fixture's batch exceeds, so that its gradients are scaled rather than left alone.
+    /// </summary>
+    private static float MaxGradientNormForTheBatch => 0.1f;
+
+    private static IReadOnlyList<IReadOnlyList<double>> BatchInput =>
+        TrainingFixture.BatchInputInDoublePrecision;
+
+    private static IReadOnlyList<double> BatchTargets => TrainingFixture.BatchTargetsInDoublePrecision;
+
     #endregion
 
     #region Public
+
+    [TestMethod]
+    public async Task AClippedBatchOfSeveralSamplesMovesAParameterByTheScaledMeanOfTheirGradientsAsync()
+    {
+        // Every number here comes from the reference neuron rather than from the library:  the mean over the
+        //  batch's samples, the norm of those means, the factor, and the step.  Note what no clipped test can
+        //  see -- once the norm exceeds the limit the step depends only on the gradients' direction, so a batch
+        //  whose gradients were all averaged twice would take the same step.  That is what the unclipped
+        //  BatchTrainingTests pin.
+        TrainingSession session = TrainingSession.Start(
+            TrainingFixture.BuildNeuronNetwork(),
+            TrainingFixture.CreateSettings(
+                Optimizers.GradientDescent,
+                LearningRate,
+                maxGradientNorm: MaxGradientNormForTheBatch));
+
+        ReferenceNeuron neuron = TrainingFixture.CreateReferenceNeuron();
+
+        (IReadOnlyList<double> weightGradients, double biasGradient) =
+            neuron.CalculateBatchGradients(BatchInput, BatchTargets);
+
+        double norm = Math.Sqrt(weightGradients.Sum(gradient => gradient * gradient) + (biasGradient * biasGradient));
+
+        Assert.IsTrue(
+            norm > MaxGradientNormForTheBatch,
+            $"The batch's gradients do not exceed the limit ({norm}), so nothing would be scaled.");
+
+        double scale = MaxGradientNormForTheBatch / norm;
+
+        for (int index = 0; index < neuron.Weights.Length; index++)
+            neuron.Weights[index] -= LearningRate * scale * weightGradients[index];
+
+        neuron.Bias -= LearningRate * scale * biasGradient;
+
+        await session.TrainBatchAsync(
+            [.. BatchInput.Select(sample => (IReadOnlyList<float>)[.. sample.Select(value => (float)value)])],
+            [.. BatchTargets.Select(target => (IReadOnlyList<float>)[(float)target])]);
+
+        NeuralLayerDocument layer = TrainingFixture.ReadLayer(session.Network);
+
+        NetworkAssert.ValuesAre(layer.WeightMatrix.Single(), neuron.Weights, "weight of");
+        NetworkAssert.ValuesAre(layer.BiasVector, [neuron.Bias], "bias of");
+    }
 
     [TestMethod]
     public async Task ANormAboveTheMaximumScalesEveryGradientDownToItAsync()
@@ -43,14 +97,16 @@ public class GradientClippingTests
             double norm = CalculateNorm(gradients);
             float maxGradientNorm = (float)(norm / 4);
 
-            await Adopt(network, Optimizers.GradientDescent(), maxGradientNorm).TrainBatchAsync(input, targetOutput);
+            await Adopt(network, Optimizers.GradientDescent, maxGradientNorm).TrainBatchAsync(input, targetOutput);
 
             // One factor for every parameter of the network, taken from the norm of all of them together.
             double scale = maxGradientNorm / norm;
 
             NetworkAssert.ValuesAre(
                 ReadParameters(network).Select(value => (float)value),
-                startingParameters.Zip(gradients, (parameter, gradient) => parameter - (LearningRate * scale * gradient)),
+                startingParameters.Zip(
+                    gradients,
+                    (parameter, gradient) => parameter - (LearningRate * scale * gradient)),
                 "clipped parameter");
         }
     }
@@ -66,8 +122,8 @@ public class GradientClippingTests
 
             double norm = CalculateNorm(await MeasureGradientsAsync(clipped, input, targetOutput));
 
-            await Adopt(clipped, Optimizers.GradientDescent(), (float)(norm * 2)).TrainBatchAsync(input, targetOutput);
-            await Adopt(unclipped, Optimizers.GradientDescent(), maxGradientNorm: null)
+            await Adopt(clipped, Optimizers.GradientDescent, (float)(norm * 2)).TrainBatchAsync(input, targetOutput);
+            await Adopt(unclipped, Optimizers.GradientDescent, maxGradientNorm: null)
                 .TrainBatchAsync(input, targetOutput);
 
             // Left as they are, not merely nearly so:  the same bits as training with no limit at all.
@@ -128,8 +184,8 @@ public class GradientClippingTests
     [TestMethod]
     public async Task AdamSeesTheGradientsScaledRatherThanItsStepAsync()
     {
-        INeuralNetwork clipped = BuildNeuronNetwork();
-        INeuralNetwork unclipped = BuildNeuronNetwork();
+        INeuralNetwork clipped = TrainingFixture.BuildNeuronNetwork();
+        INeuralNetwork unclipped = TrainingFixture.BuildNeuronNetwork();
 
         IReadOnlyList<IReadOnlyList<float>> input = [[0.4f, -0.6f], [-0.2f, 0.8f]];
         IReadOnlyList<IReadOnlyList<float>> targetOutput = [[1f], [-1f]];
@@ -185,10 +241,10 @@ public class GradientClippingTests
     public async Task AResumedSessionKeepsItsMaximumAsync()
     {
         TrainingSession session = TrainingSession.Start(
-            BuildNeuronNetwork(),
+            TrainingFixture.BuildNeuronNetwork(),
             CreateSettings(Optimizers.Momentum(), maxGradientNorm: 0.25f));
 
-        await session.TrainSampleAsync([0.4f, -0.6f], [1f]);
+        await session.TrainSampleAsync(TrainingFixture.BatchInput[0], TrainingFixture.BatchTargets[0]);
 
         TrainingSession resumed = TrainingSession.Resume(session.ToJson());
 
@@ -198,10 +254,10 @@ public class GradientClippingTests
     [TestMethod]
     public void AMaximumThatIsNotPositiveIsRefused()
     {
-        Asserter.AssertThat(() => CreateSettings(Optimizers.GradientDescent(), maxGradientNorm: 0))
+        Asserter.AssertThat(() => CreateSettings(Optimizers.GradientDescent, maxGradientNorm: 0))
             .Throws<ArgumentOutOfRangeException>();
 
-        Asserter.AssertThat(() => CreateSettings(Optimizers.GradientDescent(), maxGradientNorm: -1))
+        Asserter.AssertThat(() => CreateSettings(Optimizers.GradientDescent, maxGradientNorm: -1))
             .Throws<ArgumentOutOfRangeException>();
     }
 
@@ -209,14 +265,8 @@ public class GradientClippingTests
 
     #region Private
 
-    private TrainingSettings CreateSettings(IOptimizer optimizer, float? maxGradientNorm)
-    {
-        return new TrainingSettings(
-            CostDerivatives.MeanSquaredError,
-            optimizer,
-            LearningRateSchedulers.ConstantLearningRateScheduler(LearningRate),
-            maxGradientNorm);
-    }
+    private TrainingSettings CreateSettings(IOptimizer optimizer, float? maxGradientNorm) =>
+        TrainingFixture.CreateSettings(optimizer, LearningRate, maxGradientNorm: maxGradientNorm);
 
     private TrainingSession Adopt(INeuralNetwork network, IOptimizer optimizer, float? maxGradientNorm) =>
         TrainingSession.Adopt(network, CreateSettings(optimizer, maxGradientNorm));
@@ -263,8 +313,8 @@ public class GradientClippingTests
         TrainingSession measuring = TrainingSession.Start(
             network,
             new TrainingSettings(
-                CostDerivatives.MeanSquaredError,
-                Optimizers.GradientDescent(),
+                CostFunctions.MeanSquaredError,
+                Optimizers.GradientDescent,
                 LearningRateSchedulers.ConstantLearningRateScheduler(1)));
 
         await measuring.TrainBatchAsync(input, targetOutput);
@@ -316,20 +366,6 @@ public class GradientClippingTests
         double scale = norm > maxGradientNorm ? maxGradientNorm / norm : 1;
 
         return [.. gradients.Select(gradient => gradient * scale)];
-    }
-
-    private INeuralNetwork BuildNeuronNetwork()
-    {
-        NeuralNetworkBuilder builder = new(inputCount: 2);
-
-        builder.AddDenseLayer(1, ActivationFunctions.Tanh, new GlorotUniformWeightInitializer(seed: 1));
-
-        NetworkDocument document = NetworkDocument.FromNetwork(builder.BuildNetwork());
-
-        document.NeuralLayers[0].SetWeightMatrix([0.5f, -0.25f]);
-        document.NeuralLayers[0].SetBiasVector(0.1f);
-
-        return document.BuildNetwork();
     }
 
     #endregion

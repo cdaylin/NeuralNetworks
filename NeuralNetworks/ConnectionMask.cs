@@ -41,12 +41,39 @@ internal class ConnectionMask : CloneableObject, IConnectionMask
         }
     }
 
+    /// <summary>
+    /// Constructs a mask from a saved document.
+    /// </summary>
+    /// <remarks>
+    /// The document is checked against itself here rather than where a connection is first read, because every
+    /// reader of a mask indexes a row by an input index:  a row shorter than the input count builds a mask that
+    /// answers for the connections it has and throws on the first one it does not, and a row longer than the
+    /// input count makes the unmasked count negative, which a sparse layer then holds its weight rows against.
+    /// A row may legitimately be absent, which means no connection of that output value is masked.
+    /// </remarks>
+    /// <param name="inputCount">
+    /// Number of incoming connections for each output value.
+    /// </param>
+    /// <param name="outputCount">
+    /// Number of output values the mask describes.
+    /// </param>
+    /// <param name="maskMatrix">
+    /// One row for each output value, each row holding one value per incoming connection, or absent.
+    /// </param>
     [JsonConstructor]
     protected ConnectionMask(
         int inputCount,
         int outputCount,
         bool[]?[] maskMatrix)
     {
+        inputCount.ThrowIfNotPositive();
+        outputCount.ThrowIfNotPositive();
+        maskMatrix.ThrowIfNull();
+        maskMatrix.Length.ThrowIfNotEqualTo(outputCount);
+
+        foreach (bool[]? maskVector in maskMatrix)
+            maskVector?.Length.ThrowIfNotEqualTo(inputCount);
+
         InputCount = inputCount;
         OutputCount = outputCount;
         MaskMatrix = maskMatrix;

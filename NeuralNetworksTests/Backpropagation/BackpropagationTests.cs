@@ -1,4 +1,5 @@
 ﻿using Daylin.NeuralNetworks.Activation;
+using Daylin.NeuralNetworks.Backpropagation.Cost;
 using Daylin.NeuralNetworks.Backpropagation.LearningRate;
 using Daylin.NeuralNetworks.Backpropagation.Optimization;
 using Daylin.NeuralNetworks.WeightInitialization;
@@ -115,7 +116,7 @@ public class BackpropagationTests
         TrainingSession session = TrainingSession.Start(
             networkBuilder.BuildNetwork(),
             new TrainingSettings(
-                CostDerivatives.MeanSquaredError,
+                CostFunctions.MeanSquaredError,
                 Optimizers.Adam(),
                 LearningRateSchedulers.ExponentialDecayLearningRateScheduler(0.05f, decayRate: 0.999f)));
 
@@ -255,8 +256,8 @@ public class BackpropagationTests
             $"Starting to train neural network {(networkDescription is null ? "" : $": {networkDescription}")}.");
 
         settings ??= new TrainingSettings(
-            CostDerivatives.MeanSquaredError,
-            Optimizers.GradientDescent(),
+            CostFunctions.MeanSquaredError,
+            Optimizers.GradientDescent,
             LearningRateSchedulers.ConstantLearningRateScheduler(.1f));
 
         TrainingSession session = TrainingSession.Adopt(neuralNetwork, settings);

@@ -1,4 +1,5 @@
 ﻿using Daylin.NeuralNetworks.Activation;
+using Daylin.NeuralNetworks.Backpropagation.Cost;
 using Daylin.NeuralNetworks.Backpropagation.LearningRate;
 using Daylin.NeuralNetworks.Backpropagation.Optimization;
 using Daylin.NeuralNetworks.LayerTemplates;
@@ -315,8 +316,8 @@ public class TrainingStepTests
     private IConnectionWeightInitializer WeightInitializer { get; } = new GlorotUniformWeightInitializer(seed: 1);
 
     private TrainingSettings Settings { get; } = new(
-        CostDerivatives.MeanSquaredError,
-        Optimizers.GradientDescent(),
+        CostFunctions.MeanSquaredError,
+        Optimizers.GradientDescent,
         LearningRateSchedulers.ConstantLearningRateScheduler(LearningRate));
 
     /// <summary>

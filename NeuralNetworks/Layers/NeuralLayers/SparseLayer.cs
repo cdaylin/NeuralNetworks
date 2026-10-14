@@ -10,18 +10,30 @@ internal sealed class SparseLayer : NeuralLayer
     #region Private Static
 
     /// <summary>
-    /// Index of the parameter group holding the layer's biases.
-    /// </summary>
-    private static int BiasGroupIndex => 0;
-
-    /// <summary>
-    /// Index of the parameter group holding the connection weights of the first output value.
+    /// Refuses a mask that does not describe the layer it is masking.
     /// </summary>
     /// <remarks>
-    /// Each output value's weights are a group of their own, in output value order, and a group holds only
-    /// the weights of the connections the output value has.
+    /// Called from both constructors, since the invariant belongs to the layer rather than to one way of
+    /// building it:  a document is as able to carry a mask of the wrong shape as a caller is to pass one.
     /// </remarks>
-    private static int FirstWeightGroupIndex => 1;
+    /// <param name="connectionMask">
+    /// The mask saying which connections the layer holds a weight for.
+    /// </param>
+    /// <param name="inputCount">
+    /// Number of values fed into the layer.
+    /// </param>
+    /// <param name="outputCount">
+    /// Number of values output from the layer.
+    /// </param>
+    private static void ThrowIfMaskDoesNotFitTheLayer(
+        IConnectionMask connectionMask,
+        int inputCount,
+        int outputCount)
+    {
+        connectionMask.ThrowIfNull();
+        connectionMask.InputCount.ThrowIfNotEqualTo(inputCount);
+        connectionMask.OutputCount.ThrowIfNotEqualTo(outputCount);
+    }
 
     #endregion
 
@@ -35,9 +47,7 @@ internal sealed class SparseLayer : NeuralLayer
         IConnectionMask connectionMask)
         : base(inputCount, outputCount, activationFunction, weightInitializer)
     {
-        connectionMask.ThrowIfNull();
-        connectionMask.InputCount.ThrowIfNotEqualTo(inputCount);
-        connectionMask.OutputCount.ThrowIfNotEqualTo(outputCount);
+        ThrowIfMaskDoesNotFitTheLayer(connectionMask, inputCount, outputCount);
 
         ConnectionMask = connectionMask;
 
@@ -60,6 +70,22 @@ internal sealed class SparseLayer : NeuralLayer
         IConnectionMask connectionMask)
         : base(inputCount, outputCount, activationFunction, weightInitializer)
     {
+        // Checked here rather than where a weight is first read:  a document whose arrays do not match its mask
+        //  otherwise builds a layer that answers and then fails partway through a training batch.  The mask's
+        //  own rows are checked where the mask is read.
+        ThrowIfMaskDoesNotFitTheLayer(connectionMask, inputCount, outputCount);
+        biasVector.ThrowIfNull();
+        biasVector.Length.ThrowIfNotEqualTo(outputCount);
+        weightMatrix.ThrowIfNull();
+        weightMatrix.ThrowIfContainsNull();
+        weightMatrix.Length.ThrowIfNotEqualTo(outputCount);
+
+        for (int outputIndex = 0; outputIndex < outputCount; outputIndex++)
+        {
+            weightMatrix[outputIndex].Length.ThrowIfNotEqualTo(
+                connectionMask.GetUnmaskedConnectionCount(outputIndex));
+        }
+
         WeightMatrix = weightMatrix;
         BiasVector = biasVector;
         ConnectionMask = connectionMask;
@@ -116,15 +142,10 @@ internal sealed class SparseLayer : NeuralLayer
 
     protected override IEnumerable<float> GetWeights(int outputIndex) => WeightMatrix[outputIndex];
 
-    protected override IReadOnlyList<ParameterGroup> CreateParameterGroups()
-    {
-        return [new ParameterGroup(BiasVector), .. WeightMatrix.Select(weights => new ParameterGroup(weights))];
-    }
+    protected override ParameterGroup CreateBiasGroup() => new(BiasVector);
 
-    protected override void AccumulateBiasGradient(int outputIndex, float gradient)
-    {
-        GetGradients(BiasGroupIndex)[outputIndex] += gradient;
-    }
+    protected override IReadOnlyList<ParameterGroup> CreateWeightGroups() =>
+        [.. WeightMatrix.Select(weights => new ParameterGroup(weights))];
 
     protected override float GetWeight(int inputIndex, int outputIndex)
     {
@@ -140,16 +161,6 @@ internal sealed class SparseLayer : NeuralLayer
         }
 
         return WeightMatrix[outputIndex][weightIndex];
-    }
-
-    protected override void AccumulateWeightGradients(int outputIndex, IEnumerable<float> gradients)
-    {
-        float[] weightGradients = GetGradients(FirstWeightGroupIndex + outputIndex);
-
-        int weightIndex = 0;
-
-        foreach (float gradient in gradients)
-            weightGradients[weightIndex++] += gradient;
     }
 
     #endregion

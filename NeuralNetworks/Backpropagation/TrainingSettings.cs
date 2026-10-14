@@ -1,4 +1,5 @@
-﻿using Daylin.NeuralNetworks.Backpropagation.LearningRate;
+﻿using Daylin.NeuralNetworks.Backpropagation.Cost;
+using Daylin.NeuralNetworks.Backpropagation.LearningRate;
 using Daylin.NeuralNetworks.Backpropagation.Optimization;
 
 using System.Text.Json.Serialization;
@@ -31,9 +32,9 @@ public sealed class TrainingSettings
     /// <summary>
     /// Constructs training settings.
     /// </summary>
-    /// <param name="costDerivative">
-    /// The function calculating the derivative of the cost with respect to each of the network's output
-    /// values.
+    /// <param name="costFunction">
+    /// The cost being minimized, which measures each of the network's output values against the value wanted
+    /// and supplies the derivative training moves against.
     /// </param>
     /// <param name="optimizer">
     /// The optimizer moving the network's parameters in response to the gradients training calculates.
@@ -47,17 +48,17 @@ public sealed class TrainingSettings
     /// </param>
     [JsonConstructor]
     public TrainingSettings(
-        ICostDerivative costDerivative,
+        ICostFunction costFunction,
         IOptimizer optimizer,
         ILearningRateScheduler learningRateScheduler,
         float? maxGradientNorm = null)
     {
-        costDerivative.ThrowIfNull();
+        costFunction.ThrowIfNull();
         optimizer.ThrowIfNull();
         learningRateScheduler.ThrowIfNull();
         maxGradientNorm?.ThrowIfNotPositive();
 
-        CostDerivative = costDerivative;
+        CostFunction = costFunction;
         Optimizer = optimizer;
         LearningRateScheduler = learningRateScheduler;
         MaxGradientNorm = maxGradientNorm;
@@ -68,9 +69,10 @@ public sealed class TrainingSettings
     #region Public
 
     /// <summary>
-    /// The function calculating the derivative of the cost with respect to each of the network's output values.
+    /// The cost being minimized, which training measures each output value with and moves against the derivative
+    /// of.
     /// </summary>
-    public ICostDerivative CostDerivative { get; }
+    public ICostFunction CostFunction { get; }
 
     /// <summary>
     /// The optimizer moving the network's parameters in response to the gradients training calculates.

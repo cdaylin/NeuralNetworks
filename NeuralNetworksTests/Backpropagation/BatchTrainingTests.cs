@@ -1,4 +1,5 @@
 ﻿using Daylin.NeuralNetworks.Activation;
+using Daylin.NeuralNetworks.Backpropagation.Cost;
 using Daylin.NeuralNetworks.Backpropagation.LearningRate;
 using Daylin.NeuralNetworks.Backpropagation.Optimization;
 using Daylin.NeuralNetworks.Serialization;
@@ -34,8 +35,8 @@ public class BatchTrainingTests
     [TestMethod]
     public async Task OneSampleIsABatchOfOneAsync()
     {
-        TrainingSession trainedOnOneSample = StartSession(Optimizers.GradientDescent());
-        TrainingSession trainedOnABatch = StartSession(Optimizers.GradientDescent());
+        TrainingSession trainedOnOneSample = StartSession(Optimizers.GradientDescent);
+        TrainingSession trainedOnABatch = StartSession(Optimizers.GradientDescent);
 
         await trainedOnOneSample.TrainSampleAsync([.. BatchInput[0]], [.. BatchTargets[0]]);
 
@@ -47,7 +48,7 @@ public class BatchTrainingTests
     [TestMethod]
     public async Task ABatchMovesEachParameterByWhatItsSamplesCallForAveragedOverThemAsync()
     {
-        TrainingSession session = StartSession(Optimizers.GradientDescent());
+        TrainingSession session = StartSession(Optimizers.GradientDescent);
 
         await session.TrainBatchAsync(BatchInput, BatchTargets);
 
@@ -73,8 +74,8 @@ public class BatchTrainingTests
     [TestMethod]
     public async Task ABatchMovesTheNetworkTheSameWayHoweverItsSamplesAreOrderedAsync()
     {
-        TrainingSession session = StartSession(Optimizers.GradientDescent());
-        TrainingSession reversedSession = StartSession(Optimizers.GradientDescent());
+        TrainingSession session = StartSession(Optimizers.GradientDescent);
+        TrainingSession reversedSession = StartSession(Optimizers.GradientDescent);
 
         await session.TrainBatchAsync(BatchInput, BatchTargets);
 
@@ -90,7 +91,7 @@ public class BatchTrainingTests
 
         NeuralLayerDocument layerBeforeTraining = ReadLayer(network);
 
-        TrainingSession session = TrainingSession.Start(network, CreateSettings(Optimizers.GradientDescent()));
+        TrainingSession session = TrainingSession.Start(network, CreateSettings(Optimizers.GradientDescent));
 
         await session.TrainBatchAsync(BatchInput, BatchTargets);
 
@@ -109,7 +110,7 @@ public class BatchTrainingTests
 
         NeuralLayerDocument layerBeforeTraining = ReadLayer(network);
 
-        TrainingSession session = TrainingSession.Adopt(network, CreateSettings(Optimizers.GradientDescent()));
+        TrainingSession session = TrainingSession.Adopt(network, CreateSettings(Optimizers.GradientDescent));
 
         await session.TrainBatchAsync(BatchInput, BatchTargets);
 
@@ -149,8 +150,8 @@ public class BatchTrainingTests
         // Cancelled once the batch has learned from a sample, so that there are accumulated gradients for the
         // network to discard rather than none.
         TrainingSession session = StartSession(
-            Optimizers.GradientDescent(),
-            costDerivative: new CancellingCostDerivative(cancellation));
+            Optimizers.GradientDescent,
+            costFunction: new CancellingCostFunction(cancellation));
 
         NeuralLayerDocument layerBeforeTraining = ReadLayer(session.Network);
 
@@ -166,14 +167,14 @@ public class BatchTrainingTests
         using CancellationTokenSource cancellation = new();
 
         TrainingSession abandonedFirst = StartSession(
-            Optimizers.GradientDescent(),
-            costDerivative: new CancellingCostDerivative(cancellation));
+            Optimizers.GradientDescent,
+            costFunction: new CancellingCostFunction(cancellation));
 
         await Assert.ThrowsExactlyAsync<OperationCanceledException>(
             () => abandonedFirst.TrainBatchAsync(BatchInput, BatchTargets, cancellation.Token));
 
         // A second session over the same batch, with nothing abandoned before it.
-        TrainingSession trainedOnce = StartSession(Optimizers.GradientDescent());
+        TrainingSession trainedOnce = StartSession(Optimizers.GradientDescent);
 
         await abandonedFirst.TrainBatchAsync(BatchInput, BatchTargets);
         await trainedOnce.TrainBatchAsync(BatchInput, BatchTargets);
@@ -186,7 +187,7 @@ public class BatchTrainingTests
     {
         NeuralNetworkBuilder builder = new(inputCount: 4);
 
-        builder.AddConvolutionalLayer(2, ActivationFunctions.Tanh, WeightInitializer);
+        builder.AddConvolutionalLayer(2, ActivationFunctions.Tanh, new GlorotUniformWeightInitializer(seed: 1));
 
         NetworkDocument document = NetworkDocument.FromNetwork(builder.BuildNetwork());
 
@@ -194,7 +195,7 @@ public class BatchTrainingTests
         document.NeuralLayers[0].SetBiasVector(0.1f);
 
         TrainingSession session =
-            TrainingSession.Start(document.BuildNetwork(), CreateSettings(Optimizers.GradientDescent()));
+            TrainingSession.Start(document.BuildNetwork(), CreateSettings(Optimizers.GradientDescent));
 
         IReadOnlyList<IReadOnlyList<float>> input = [[0.4f, -0.6f, 0.8f, 1f], [-0.2f, 0.8f, 0.1f, -0.3f]];
         IReadOnlyList<IReadOnlyList<float>> targets = [[1f, -1f], [-1f, 0.5f]];
@@ -239,8 +240,8 @@ public class BatchTrainingTests
     [TestMethod]
     public async Task AnEpochTrainsEveryBatchAndTheRemainderThatFollowsThemAsync()
     {
-        TrainingSession trainedByEpoch = StartSession(Optimizers.GradientDescent());
-        TrainingSession trainedByBatch = StartSession(Optimizers.GradientDescent());
+        TrainingSession trainedByEpoch = StartSession(Optimizers.GradientDescent);
+        TrainingSession trainedByBatch = StartSession(Optimizers.GradientDescent);
 
         await trainedByEpoch.TrainEpochAsync(BatchInput, BatchTargets, batchSize: 2);
 
@@ -257,7 +258,7 @@ public class BatchTrainingTests
     [TestMethod]
     public async Task AnEpochIsCountedOnceItsLastBatchIsDoneAsync()
     {
-        TrainingSession session = StartSession(Optimizers.GradientDescent());
+        TrainingSession session = StartSession(Optimizers.GradientDescent);
 
         Assert.AreEqual(0, session.CompletedEpochCount, "Epochs completed by a session that has not trained.");
 
@@ -275,12 +276,12 @@ public class BatchTrainingTests
     public async Task EveryBatchOfAnEpochTrainsAtTheEpochsLearningRateAsync()
     {
         TrainingSettings decaying = new(
-            CostDerivatives.MeanSquaredError,
-            Optimizers.GradientDescent(),
+            CostFunctions.MeanSquaredError,
+            Optimizers.GradientDescent,
             LearningRateSchedulers.ExponentialDecayLearningRateScheduler(LearningRate, decayRate: 0.5f));
 
         TrainingSession trainedByEpoch = TrainingSession.Start(BuildNetwork(), decaying);
-        TrainingSession trainedByBatch = StartSession(Optimizers.GradientDescent());
+        TrainingSession trainedByBatch = StartSession(Optimizers.GradientDescent);
 
         await trainedByEpoch.TrainEpochAsync(BatchInput, BatchTargets, batchSize: 2);
 
@@ -296,7 +297,7 @@ public class BatchTrainingTests
         // The second epoch's batches train at half of it, which a session started on that rate matches.
         TrainingSession trainedAtHalfTheRate = TrainingSession.Start(
             trainedByBatch.Network,
-            CreateSettings(Optimizers.GradientDescent(), LearningRate / 2));
+            CreateSettings(Optimizers.GradientDescent, LearningRate / 2));
 
         await trainedByEpoch.TrainEpochAsync(BatchInput, BatchTargets, batchSize: 2);
 
@@ -312,7 +313,7 @@ public class BatchTrainingTests
     [TestMethod]
     public async Task TrainingRejectsABatchWhoseInputsAndTargetsDoNotPairUpAsync()
     {
-        TrainingSession session = StartSession(Optimizers.GradientDescent());
+        TrainingSession session = StartSession(Optimizers.GradientDescent);
 
         await Assert.ThrowsExactlyAsync<ArgumentOutOfRangeException>(
             () => session.TrainBatchAsync(BatchInput, [BatchTargets[0]]));
@@ -325,51 +326,27 @@ public class BatchTrainingTests
 
     #region Private
 
-    private IConnectionWeightInitializer WeightInitializer { get; } = new GlorotUniformWeightInitializer(seed: 1);
+    private INeuralNetwork BuildNetwork() => TrainingFixture.BuildNeuronNetwork();
 
-    /// <summary>
-    /// Builds a network of one neuron over two input values, with known weights and bias.
-    /// </summary>
-    /// <returns>
-    /// Returns the network, which <see cref="CreateReferenceNeuron"/> describes.
-    /// </returns>
-    private INeuralNetwork BuildNetwork()
-    {
-        NeuralNetworkBuilder builder = new(inputCount: 2);
-
-        builder.AddDenseLayer(1, ActivationFunctions.Tanh, WeightInitializer);
-
-        NetworkDocument document = NetworkDocument.FromNetwork(builder.BuildNetwork());
-
-        document.NeuralLayers[0].SetWeightMatrix([0.5f, -0.25f]);
-        document.NeuralLayers[0].SetBiasVector(0.1f);
-
-        return document.BuildNetwork();
-    }
-
-    private ReferenceNeuron CreateReferenceNeuron() => new([0.5, -0.25], 0.1);
+    private ReferenceNeuron CreateReferenceNeuron() => TrainingFixture.CreateReferenceNeuron();
 
     private TrainingSettings CreateSettings(
         IOptimizer optimizer,
         float learningRate = 0.5f,
-        ICostDerivative? costDerivative = null)
+        ICostFunction? costFunction = null)
     {
-        return new TrainingSettings(
-            costDerivative ?? CostDerivatives.MeanSquaredError,
-            optimizer,
-            LearningRateSchedulers.ConstantLearningRateScheduler(learningRate));
+        return TrainingFixture.CreateSettings(optimizer, learningRate, costFunction);
     }
 
     private TrainingSession StartSession(
         IOptimizer optimizer,
         float learningRate = 0.5f,
-        ICostDerivative? costDerivative = null)
+        ICostFunction? costFunction = null)
     {
-        return TrainingSession.Start(BuildNetwork(), CreateSettings(optimizer, learningRate, costDerivative));
+        return TrainingFixture.StartSession(optimizer, learningRate, costFunction);
     }
 
-    private NeuralLayerDocument ReadLayer(INeuralNetwork network) =>
-        NetworkDocument.FromNetwork(network).NeuralLayers.Single();
+    private NeuralLayerDocument ReadLayer(INeuralNetwork network) => TrainingFixture.ReadLayer(network);
 
     private IReadOnlyList<IReadOnlyList<double>> ToDouble(IReadOnlyList<IReadOnlyList<float>> samples) =>
         samples.Select(sample => (IReadOnlyList<double>)sample.Select(value => (double)value).ToList()).ToList();
@@ -389,36 +366,20 @@ public class BatchTrainingTests
             "bias of");
     }
 
-    private void AssertNetworksAgree(INeuralNetwork network, INeuralNetwork other)
-    {
-        NeuralLayerDocument layer = ReadLayer(network);
-        NeuralLayerDocument otherLayer = ReadLayer(other);
-
-        for (int rowIndex = 0; rowIndex < layer.WeightMatrix.Count; rowIndex++)
-        {
-            NetworkAssert.ValuesAre(
-                otherLayer.WeightMatrix[rowIndex],
-                layer.WeightMatrix[rowIndex].Select(weight => (double)weight),
-                $"weight in row {rowIndex} of");
-        }
-
-        NetworkAssert.ValuesAre(
-            otherLayer.BiasVector,
-            layer.BiasVector.Select(bias => (double)bias),
-            "bias of");
-    }
+    private void AssertNetworksAgree(INeuralNetwork network, INeuralNetwork other) =>
+        TrainingFixture.AssertNetworksAgree(network, other);
 
     /// <summary>
-    /// A cost derivative that cancels a batch once it has learned from its first sample.
+    /// A cost function that cancels a batch once it has learned from its first sample.
     /// </summary>
     /// <remarks>
-    /// It is called once for each of a sample's output values, and the networks these tests build have one, so
-    /// the second call belongs to the second sample:  by then the first sample's gradients have been
-    /// accumulated and are the network's to discard.
+    /// Its derivative is asked for once for each of a sample's output values, and the networks these tests build
+    /// have one, so the second call belongs to the second sample:  by then the first sample's gradients have
+    /// been accumulated and are the network's to discard.
     /// </remarks>
-    private sealed class CancellingCostDerivative : ICostDerivative
+    private sealed class CancellingCostFunction : ICostFunction
     {
-        public CancellingCostDerivative(CancellationTokenSource cancellation)
+        public CancellingCostFunction(CancellationTokenSource cancellation)
         {
             cancellation.ThrowIfNull();
 
@@ -427,14 +388,17 @@ public class BatchTrainingTests
 
         public string ShortName => "CancelsAfterOneSample";
 
-        public float Calculate(float targetValue, float actualValue)
+        public float Calculate(float targetValue, float actualValue) =>
+            CostFunctions.MeanSquaredError.Calculate(targetValue, actualValue);
+
+        public float CalculateDerivative(float targetValue, float actualValue)
         {
             CallCount += 1;
 
             if (CallCount == 2)
                 Cancellation.Cancel();
 
-            return CostDerivatives.MeanSquaredError.Calculate(targetValue, actualValue);
+            return CostFunctions.MeanSquaredError.CalculateDerivative(targetValue, actualValue);
         }
 
         private CancellationTokenSource Cancellation { get; }
