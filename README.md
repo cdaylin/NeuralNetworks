@@ -135,7 +135,7 @@ weights one training step leaves in each layer type, each optimizer's formula, h
 the learning-rate schedules, gradient clipping, what a saved network and a saved session carry, that
 training the same network on the same samples twice leaves the same bits, and what training does with
 a step that fails, a gradient that is not a number, and state saved for a network of another shape.
-All 146 run in a few seconds.
+All 147 run in a few seconds.
 
 Every network is built from a **seeded** weight initializer, so each run trains exactly the same
 networks and a failure is a real signal rather than an unlucky draw.  The seeds are arbitrary and
