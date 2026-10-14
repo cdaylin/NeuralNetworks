@@ -1,0 +1,47 @@
+# Line endings: LF, everywhere, declared here rather than left to a
+# per-machine git setting, so it travels with the repository -- any clone, on
+# Windows or Linux, by a person or an agent, behaves the same.
+#
+# The property this protects is that a commit followed by a checkout returns
+# the file unchanged. The Git-for-Windows default core.autocrlf=true does not
+# have it: LF goes into the repository and CRLF comes back out, so a file a
+# tool has just written and the same file after a checkout differ in every
+# line. That cost Crucible a task hash that reported a change where there was
+# none. See ContextWiki, Preferences/Git.md.
+#
+# The companion .editorconfig asks editors to write LF in the first place,
+# which is the part that addresses the cause rather than converting after it.
+* text=auto eol=lf
+
+# Binary types are declared, never guessed. Git decides text-vs-binary by
+# hunting for a NUL byte in the first 8000 bytes, and a compressed file can
+# carry none at all -- after which line-ending conversion silently corrupts
+# it on checkout. A ReportLab upgrade produced exactly such PDFs.
+*.pdf binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.bmp binary
+*.ico binary
+*.webp binary
+*.mp3 binary
+*.wav binary
+*.ogg binary
+*.mp4 binary
+*.webm binary
+*.ttf binary
+*.otf binary
+*.woff binary
+*.woff2 binary
+*.zip binary
+*.gz binary
+*.7z binary
+*.dll binary
+*.exe binary
+*.pdb binary
+*.so binary
+*.dylib binary
+*.docx binary
+*.xlsx binary
+*.pptx binary
